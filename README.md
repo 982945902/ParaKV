@@ -1,0 +1,3 @@
+# ParaKV
+
+ParaKV is a high-performance KV storage engine designed for LLM KVCache and recommendation system sparse parameters. Built on SPDK and raw disk management, it delivers microsecond-level latency. With in-memory hash indexing and fixed-size slot layout, ParaKV achieves O(1) lookups. It supports RDMA/NVMe‑oF hardware offloading, intelligent hot data caching, and hot-cold separation to reduce compaction overhead. Ideal for billion-scale keys and high-concurrency random read/write workloads, ParaKV significantly outperforms traditional LSM-based engines.
