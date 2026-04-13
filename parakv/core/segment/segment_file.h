@@ -15,14 +15,43 @@ limitations under the License.
 
 #pragma once
 
+#include <string>
+
 #include "segment_base.h"
 
 namespace parakv {
-
 namespace segment {
 
 class SegmentFile : public SegmentBase {
-public:
-    SegmentFile();
-    ~SegmentFile();
+ public:
+  SegmentFile(uint32_t segment_id, const SegmentConfig& config,
+              const std::string& file_path);
+  ~SegmentFile() override;
+
+  Status Open() override;
+  Status Close() override;
+
+  Status Insert(const void* key, const void* value, uint32_t* slot_id) override;
+
+  Status BatchInsert(const void* keys, const void* values, uint32_t count,
+                     uint32_t* slot_ids) override;
+
+  Status Read(uint32_t slot_id, void* key, void* value) override;
+  Status Delete(uint32_t slot_id) override;
+  Status Compact(SegmentBase* target) override;
+  Status SyncBitmap() override;
+
+  const std::string& GetFilePath() const { return file_path_; }
+
+ private:
+  Status PWrite(const void* buf, size_t count, uint64_t offset);
+  Status PRead(void* buf, size_t count, uint64_t offset);
+  Status LoadBitmap();
+  Status FlushBitmap();
+
+  std::string file_path_;
+  int fd_;
 };
+
+}  // namespace segment
+}  // namespace parakv

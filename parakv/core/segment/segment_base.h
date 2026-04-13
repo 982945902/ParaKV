@@ -15,21 +15,104 @@ limitations under the License.
 
 #pragma once
 
+#include <cstdint>
+#include <mutex>
 #include <string>
+#include <vector>
 
 namespace parakv {
-
 namespace segment {
 
+enum class Status {
+  kOk = 0,
+  kNotFound,
+  kFull,
+  kIOError,
+  kInvalidArgument,
+  kCorruption,
+  kNoSpace,
+};
+
+enum class SegmentState {
+  IDLE = 0,
+  APPENDING,
+  FULL,
+};
+
+struct SegmentConfig {
+  uint32_t key_size = 8;
+  uint32_t value_size = 512;
+  uint64_t segment_size = 256ULL * 1024 * 1024;
+  double compaction_threshold = 0.75;
+  uint64_t bitmap_alignment = 4096;
+};
+
 class SegmentBase {
-public:
-    SegmentBase();
-    virtual ~SegmentBase();
+ public:
+  SegmentBase(uint32_t segment_id, const SegmentConfig& config);
+  virtual ~SegmentBase();
 
-    virtual void Compact() = 0;
-    virtual void Insert(const std::string& key, const std::string& value) = 0;
-    
-    };
-} // namespace segment
+  SegmentBase(const SegmentBase&) = delete;
+  SegmentBase& operator=(const SegmentBase&) = delete;
 
-} // namespace parakv
+  virtual Status Open() = 0;
+  virtual Status Close() = 0;
+
+  virtual Status Insert(const void* key, const void* value,
+                        uint32_t* slot_id) = 0;
+
+  virtual Status BatchInsert(const void* keys, const void* values,
+                             uint32_t count, uint32_t* slot_ids) = 0;
+
+  virtual Status Read(uint32_t slot_id, void* key, void* value) = 0;
+
+  virtual Status Delete(uint32_t slot_id) = 0;
+
+  virtual Status Compact(SegmentBase* target) = 0;
+
+  virtual Status SyncBitmap() = 0;
+
+  uint32_t GetSegmentId() const { return segment_id_; }
+  SegmentState GetState() const;
+  uint32_t GetTotalSlots() const { return total_slots_; }
+  uint32_t GetUsedSlots() const;
+  uint32_t GetFreeSlots() const;
+  uint32_t GetDeletedSlots() const;
+  double GetDeletedRatio() const;
+  bool NeedsCompaction() const;
+  uint32_t GetSlotSize() const { return slot_size_; }
+
+  uint64_t GetBitmapOffset() const { return 0; }
+  uint64_t GetBitmapSize() const { return bitmap_size_; }
+  uint64_t GetSlotDataAreaOffset() const { return slot_data_offset_; }
+  uint64_t GetSlotOffset(uint32_t slot_id) const;
+
+ protected:
+  void SetSlotBit(uint32_t slot_id);
+  void ClearSlotBit(uint32_t slot_id);
+  bool IsSlotOccupied(uint32_t slot_id) const;
+  int32_t FindFreeSlot() const;
+
+  void CalculateLayout();
+  void UpdateState();
+  void ResetBitmap();
+
+  uint32_t segment_id_;
+  SegmentConfig config_;
+  SegmentState state_;
+
+  uint32_t total_slots_;
+  uint32_t used_slots_;
+  uint32_t deleted_slots_;
+  uint32_t append_cursor_;
+
+  uint32_t slot_size_;
+  uint64_t bitmap_size_;
+  uint64_t slot_data_offset_;
+
+  std::vector<uint8_t> bitmap_;
+  mutable std::mutex mutex_;
+};
+
+}  // namespace segment
+}  // namespace parakv

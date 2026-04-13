@@ -1,0 +1,19 @@
+include(cc_library)
+include(cc_test)
+
+cc_library(
+    NAME
+        segment
+    HDRS
+        segment_base.h
+        segment_file.h
+        segment_block_dev.h
+        segment_manager.h
+    SRCS
+        segment_base.cc
+        segment_file.cc
+        segment_block_dev.cc
+        segment_manager.cc
+    DEPS
+        Threads::Threads
+)

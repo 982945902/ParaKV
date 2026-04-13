@@ -15,14 +15,16 @@ limitations under the License.
 
 #pragma once
 
-#include <gflags/gflags.h>
+namespace parakv {
 
-DECLARE_uint32(segment_size);
-DECLARE_uint32(segment_count);
-DECLARE_uint32(segment_key_size);
-DECLARE_uint32(segment_value_size);
-DECLARE_uint32(segment_bitmap_alignment);
-DECLARE_double(segment_compaction_threshold);
-DECLARE_uint32(segment_hot_threshold);
-DECLARE_uint32(segment_max_hot_count);
-DECLARE_uint32(segment_flush_interval_ms);
+namespace index {
+
+class Index {
+ public:
+  Index();
+  ~Index();
+};
+
+}  // namespace index
+
+}  // namespace parakv
