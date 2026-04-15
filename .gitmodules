@@ -1,0 +1,3 @@
+[submodule "third_party/brpc"]
+	path = third_party/brpc
+	url = https://gitcode.com/xLLM-AI/brpc.git
