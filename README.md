@@ -115,15 +115,15 @@ ParaKV/
 
 ## Documentation
 
-Detailed design documents are available in [`docs/cn/`](docs/cn/):
+Detailed design documents are available in [`docs/zh/design`](docs/zh/design):
 
 | Document | Description |
 |:---------|:------------|
-| [Introduction](docs/cn/introduction.md) | Background, design goals, RDMA & NVMe technology overview |
-| [Architecture](docs/cn/architecture.md) | System architecture, cluster management, hash-slot sharding |
-| [Index & WAL](docs/cn/index.md) | In-memory hash index, WAL format, snapshot & recovery |
-| [Segment](docs/cn/segment.md) | Segment layout, compaction, hot/cold data management |
-| [Version Management](docs/cn/version-management.md) | Full & incremental model update strategies |
+| [Introduction](docs/zh/design/introduction.md) | Background, design goals, RDMA & NVMe technology overview |
+| [Architecture](docs/zh/design/architecture.md) | System architecture, cluster management, hash-slot sharding |
+| [Index & WAL](docs/zh/design//index.md) | In-memory hash index, WAL format, snapshot & recovery |
+| [Segment](docs/zh/design/segment.md) | Segment layout, compaction, hot/cold data management |
+| [Version Management](docs/zh/design//version-management.md) | Full & incremental model update strategies |
 
 ## License
 

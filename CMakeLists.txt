@@ -7,7 +7,7 @@ set(YLT_ENABLE_IBV ON)
 
 if(DEVICE_ARCH STREQUAL "ARM")
     set(CMAKE_SYSTEM_PROCESSOR aarch64)
-    set(RUST_TARGET aarch64-unknown-linux-gnu)
+    # set(RUST_TARGET aarch64-unknown-linux-gnu)
 endif()
 
 
@@ -168,8 +168,8 @@ endif()
 
 # setup CMake module path, defines path for include() and find_package()
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
-enable_language(Rust)
-find_package(Rust REQUIRED)
+# enable_language(Rust)
+# find_package(Rust REQUIRED)
 
 if(UNIX)
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Og")
@@ -202,7 +202,6 @@ find_package(folly CONFIG REQUIRED)
 find_package(GTest CONFIG REQUIRED)
 find_package(benchmark CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(OpenCV CONFIG REQUIRED)
 find_package(Python COMPONENTS Development REQUIRED)
 find_package(pybind11 CONFIG REQUIRED)
 

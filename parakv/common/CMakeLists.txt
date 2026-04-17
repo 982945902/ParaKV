@@ -6,9 +6,9 @@ cc_library(
     NAME
         flags
     HDRS 
-        global_flags.h 
+        global_gflags.h 
     SRCS 
-        global_flags.cc 
+        global_gflags.cc 
     DEPS 
         gflags::gflags
 )

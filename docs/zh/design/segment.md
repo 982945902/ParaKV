@@ -12,7 +12,7 @@ ParaKV支持将数据持久化存储到文件或块设备(裸磁盘)中，为管
 
 数据在segment块中的偏移是可以根据上述信息计算出来的，计算逻辑参见下图：
 
-![Segment 数据组织示意图](../images/segment_layout.jpg)
+![Segment 数据组织示意图](../../images/segment_layout.jpg)
 
 # KV添加
 为保证磁盘性能，不支持原地修改操作，仅支持在segment进行append-only的操作，来减少磁盘IO。实现上，需要遵循：  
