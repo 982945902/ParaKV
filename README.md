@@ -2,6 +2,10 @@
 
 **Parallel KV for LLM & Recommendation at Storage Speed**
 
+<div align="center">
+    <img src="docs/images/parakv-logo.jpeg" />
+</div>
+
 ParaKV is a high-performance KV storage engine purpose-built for two demanding workloads: **LLM KV Cache** and **recommendation-system sparse parameters**. By combining SPDK user-space NVMe drivers, RDMA networking, and an append-only segment layout, ParaKV delivers microsecond-level latency and millions of QPS on commodity hardware.
 
 ## Key Features
