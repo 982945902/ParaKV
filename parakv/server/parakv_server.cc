@@ -18,8 +18,9 @@ limitations under the License.
 namespace parakv {
 namespace server {
 
-ParaKvServer::ParaKvServer() {}
+ParaKvServer::ParaKvServer() = default;
 
-ParaKvServer::~ParaKvServer() {}
+ParaKvServer::~ParaKvServer() = default;
 
 }  // namespace server
+}  // namespace parakv

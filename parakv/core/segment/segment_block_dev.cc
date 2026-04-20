@@ -40,12 +40,12 @@ Status SegmentBlockDev::Open() {
     return Status::kOk;
   }
 
-  auto s = LoadBitmap();
+  const Status s = LoadBitmap();
   if (s != Status::kOk) {
     return s;
   }
 
-  // Rebuild counters from bitmap
+  // Rebuild counters from the on-disk bitmap.
   used_slots_ = 0;
   append_cursor_ = 0;
   for (uint32_t i = 0; i < total_slots_; ++i) {
@@ -68,12 +68,15 @@ Status SegmentBlockDev::Close() {
     return Status::kOk;
   }
 
-  auto s = FlushBitmap();
+  Status s = FlushBitmap();
   if (s != Status::kOk) {
     return s;
   }
 
-  io_->Sync();
+  s = io_->Sync();
+  if (s != Status::kOk) {
+    return s;
+  }
   opened_ = false;
 
   return Status::kOk;
@@ -81,7 +84,7 @@ Status SegmentBlockDev::Close() {
 
 Status SegmentBlockDev::Insert(const void* key, const void* value,
                                uint32_t* slot_id) {
-  if (!key || !value || !slot_id) {
+  if (key == nullptr || value == nullptr || slot_id == nullptr) {
     return Status::kInvalidArgument;
   }
 
@@ -90,15 +93,15 @@ Status SegmentBlockDev::Insert(const void* key, const void* value,
     return Status::kIOError;
   }
 
-  int32_t free_slot = FindFreeSlot();
+  const int32_t free_slot = FindFreeSlot();
   if (free_slot < 0) {
     return Status::kFull;
   }
 
-  uint32_t sid = static_cast<uint32_t>(free_slot);
-  uint64_t offset = AbsoluteOffset(GetSlotOffset(sid));
+  const uint32_t sid = static_cast<uint32_t>(free_slot);
+  const uint64_t offset = AbsoluteOffset(GetSlotOffset(sid));
 
-  auto s = io_->Write(key, config_.key_size, offset);
+  Status s = io_->Write(key, config_.key_size, offset);
   if (s != Status::kOk) {
     return s;
   }
@@ -125,7 +128,8 @@ Status SegmentBlockDev::Insert(const void* key, const void* value,
 
 Status SegmentBlockDev::BatchInsert(const void* keys, const void* values,
                                     uint32_t count, uint32_t* slot_ids) {
-  if (!keys || !values || !slot_ids || count == 0) {
+  if (keys == nullptr || values == nullptr || slot_ids == nullptr ||
+      count == 0) {
     return Status::kInvalidArgument;
   }
 
@@ -134,7 +138,7 @@ Status SegmentBlockDev::BatchInsert(const void* keys, const void* values,
     return Status::kIOError;
   }
 
-  uint32_t available = total_slots_ - append_cursor_;
+  const uint32_t available = total_slots_ - append_cursor_;
   if (count > available) {
     return Status::kFull;
   }
@@ -143,11 +147,11 @@ Status SegmentBlockDev::BatchInsert(const void* keys, const void* values,
   const auto* val_ptr = static_cast<const uint8_t*>(values);
 
   for (uint32_t i = 0; i < count; ++i) {
-    uint32_t sid = append_cursor_ + i;
-    uint64_t offset = AbsoluteOffset(GetSlotOffset(sid));
+    const uint32_t sid = append_cursor_ + i;
+    const uint64_t offset = AbsoluteOffset(GetSlotOffset(sid));
 
-    auto s = io_->Write(key_ptr + static_cast<size_t>(i) * config_.key_size,
-                        config_.key_size, offset);
+    Status s = io_->Write(key_ptr + static_cast<size_t>(i) * config_.key_size,
+                          config_.key_size, offset);
     if (s != Status::kOk) {
       return s;
     }
@@ -165,7 +169,7 @@ Status SegmentBlockDev::BatchInsert(const void* keys, const void* values,
     SetSlotBit(slot_ids[i]);
   }
 
-  auto s = FlushBitmap();
+  const Status s = FlushBitmap();
   if (s != Status::kOk) {
     return s;
   }
@@ -191,17 +195,18 @@ Status SegmentBlockDev::Read(uint32_t slot_id, void* key, void* value) {
     return Status::kNotFound;
   }
 
-  uint64_t offset = AbsoluteOffset(GetSlotOffset(slot_id));
+  const uint64_t offset = AbsoluteOffset(GetSlotOffset(slot_id));
 
-  if (key) {
-    auto s = io_->Read(key, config_.key_size, offset);
+  if (key != nullptr) {
+    const Status s = io_->Read(key, config_.key_size, offset);
     if (s != Status::kOk) {
       return s;
     }
   }
 
-  if (value) {
-    auto s = io_->Read(value, config_.value_size, offset + config_.key_size);
+  if (value != nullptr) {
+    const Status s =
+        io_->Read(value, config_.value_size, offset + config_.key_size);
     if (s != Status::kOk) {
       return s;
     }
@@ -225,7 +230,7 @@ Status SegmentBlockDev::Delete(uint32_t slot_id) {
   }
 
   ClearSlotBit(slot_id);
-  auto s = FlushBitmap();
+  const Status s = FlushBitmap();
   if (s != Status::kOk) {
     SetSlotBit(slot_id);
     return s;
@@ -240,7 +245,7 @@ Status SegmentBlockDev::Delete(uint32_t slot_id) {
 }
 
 Status SegmentBlockDev::Compact(SegmentBase* target) {
-  if (!target) {
+  if (target == nullptr) {
     return Status::kInvalidArgument;
   }
 
@@ -253,10 +258,12 @@ Status SegmentBlockDev::Compact(SegmentBase* target) {
   std::vector<uint8_t> val_buf(config_.value_size);
 
   for (uint32_t i = 0; i < append_cursor_; ++i) {
-    if (!IsSlotOccupied(i)) continue;
+    if (!IsSlotOccupied(i)) {
+      continue;
+    }
 
-    uint64_t offset = AbsoluteOffset(GetSlotOffset(i));
-    auto s = io_->Read(key_buf.data(), config_.key_size, offset);
+    const uint64_t offset = AbsoluteOffset(GetSlotOffset(i));
+    Status s = io_->Read(key_buf.data(), config_.key_size, offset);
     if (s != Status::kOk) {
       return s;
     }
@@ -267,7 +274,7 @@ Status SegmentBlockDev::Compact(SegmentBase* target) {
       return s;
     }
 
-    uint32_t new_slot_id;
+    uint32_t new_slot_id = 0;
     s = target->Insert(key_buf.data(), val_buf.data(), &new_slot_id);
     if (s != Status::kOk) {
       return s;

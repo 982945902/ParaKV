@@ -21,8 +21,11 @@ namespace cache {
 
 class LRU {
  public:
-  LRU();
-  ~LRU();
+  LRU() = default;
+  ~LRU() = default;
+
+  LRU(const LRU&) = delete;
+  LRU& operator=(const LRU&) = delete;
 };
 
 }  // namespace cache

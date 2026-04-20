@@ -22,6 +22,9 @@ class ParaKvClient {
  public:
   ParaKvClient();
   ~ParaKvClient();
+
+  ParaKvClient(const ParaKvClient&) = delete;
+  ParaKvClient& operator=(const ParaKvClient&) = delete;
 };
 
 }  // namespace client

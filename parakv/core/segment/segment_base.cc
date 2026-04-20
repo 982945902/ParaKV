@@ -43,22 +43,23 @@ void SegmentBase::CalculateLayout() {
   assert(slot_size_ > 0);
 
   // total_slots = floor((segment_size * 8) / (8 * slot_size + 1))
+  // (each slot costs 8*slot_size data bits + 1 bitmap bit).
   total_slots_ = static_cast<uint32_t>((config_.segment_size * 8) /
                                        (8ULL * slot_size_ + 1));
 
   bitmap_size_ = (total_slots_ + 7) / 8;
 
-  // Align bitmap area to configured boundary for I/O efficiency
-  uint64_t align = config_.bitmap_alignment;
+  // Align the bitmap area to the configured boundary for direct-I/O.
+  const uint64_t align = config_.bitmap_alignment;
   if (align > 0) {
     bitmap_size_ = (bitmap_size_ + align - 1) / align * align;
   }
 
   slot_data_offset_ = bitmap_size_;
 
-  // Recompute total_slots to fit within remaining space after alignment
-  uint64_t data_area = config_.segment_size - slot_data_offset_;
-  uint32_t max_slots = static_cast<uint32_t>(data_area / slot_size_);
+  // Recompute total_slots to fit within the remaining data area.
+  const uint64_t data_area = config_.segment_size - slot_data_offset_;
+  const uint32_t max_slots = static_cast<uint32_t>(data_area / slot_size_);
   total_slots_ = std::min(total_slots_, max_slots);
 
   bitmap_.resize(bitmap_size_, 0);
@@ -89,7 +90,6 @@ double SegmentBase::GetDeletedRatio() const {
   if (append_cursor_ == 0) {
     return 0.0;
   }
-
   return static_cast<double>(deleted_slots_) / append_cursor_;
 }
 
@@ -124,7 +124,6 @@ int32_t SegmentBase::FindFreeSlot() const {
   if (append_cursor_ < total_slots_) {
     return static_cast<int32_t>(append_cursor_);
   }
-
   return -1;
 }
 

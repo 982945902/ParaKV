@@ -18,9 +18,9 @@ limitations under the License.
 namespace parakv {
 namespace client {
 
-ParaKvClient::ParaKvClient() {}
+ParaKvClient::ParaKvClient() = default;
 
-ParaKvClient::~ParaKvClient() {}
+ParaKvClient::~ParaKvClient() = default;
 
 }  // namespace client
 }  // namespace parakv

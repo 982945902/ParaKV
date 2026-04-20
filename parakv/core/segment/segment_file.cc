@@ -37,8 +37,8 @@ Status SegmentFile::Open() {
     return Status::kOk;
   }
 
-  struct stat st;
-  bool file_exists = (::stat(file_path_.c_str(), &st) == 0);
+  struct stat st{};
+  const bool file_exists = (::stat(file_path_.c_str(), &st) == 0);
 
   int flags = O_RDWR;
   if (!file_exists) {
@@ -57,21 +57,21 @@ Status SegmentFile::Open() {
       return Status::kIOError;
     }
     ResetBitmap();
-    // Write initial empty bitmap to disk
-    auto s = FlushBitmap();
+    // Write initial empty bitmap to disk.
+    const Status s = FlushBitmap();
     if (s != Status::kOk) {
       ::close(fd_);
       fd_ = -1;
       return s;
     }
   } else {
-    auto s = LoadBitmap();
+    const Status s = LoadBitmap();
     if (s != Status::kOk) {
       ::close(fd_);
       fd_ = -1;
       return s;
     }
-    // Rebuild counters from bitmap
+    // Rebuild counters from the on-disk bitmap.
     used_slots_ = 0;
     append_cursor_ = 0;
     for (uint32_t i = 0; i < total_slots_; ++i) {
@@ -93,9 +93,11 @@ Status SegmentFile::Close() {
     return Status::kOk;
   }
 
-  FlushBitmap();
-  ::fsync(fd_);
-  ::close(fd_);
+  // Best-effort flush on close: errors are logged by the caller via the
+  // explicit SyncBitmap() path if durability is required.
+  (void)FlushBitmap();
+  (void)::fsync(fd_);
+  (void)::close(fd_);
   fd_ = -1;
 
   return Status::kOk;
@@ -103,7 +105,7 @@ Status SegmentFile::Close() {
 
 Status SegmentFile::Insert(const void* key, const void* value,
                            uint32_t* slot_id) {
-  if (!key || !value || !slot_id) {
+  if (key == nullptr || value == nullptr || slot_id == nullptr) {
     return Status::kInvalidArgument;
   }
 
@@ -112,16 +114,16 @@ Status SegmentFile::Insert(const void* key, const void* value,
     return Status::kIOError;
   }
 
-  int32_t free_slot = FindFreeSlot();
+  const int32_t free_slot = FindFreeSlot();
   if (free_slot < 0) {
     return Status::kFull;
   }
 
-  uint32_t sid = static_cast<uint32_t>(free_slot);
-  uint64_t offset = GetSlotOffset(sid);
+  const uint32_t sid = static_cast<uint32_t>(free_slot);
+  const uint64_t offset = GetSlotOffset(sid);
 
-  // Write key then value (append-only)
-  auto s = PWrite(key, config_.key_size, offset);
+  // Append key, then value. This order matches the on-disk slot layout.
+  Status s = PWrite(key, config_.key_size, offset);
   if (s != Status::kOk) {
     return s;
   }
@@ -131,7 +133,7 @@ Status SegmentFile::Insert(const void* key, const void* value,
     return s;
   }
 
-  // Update bitmap on disk, then in memory
+  // Update bitmap on disk first, then in-memory counters.
   SetSlotBit(sid);
   s = FlushBitmap();
   if (s != Status::kOk) {
@@ -149,7 +151,8 @@ Status SegmentFile::Insert(const void* key, const void* value,
 
 Status SegmentFile::BatchInsert(const void* keys, const void* values,
                                 uint32_t count, uint32_t* slot_ids) {
-  if (!keys || !values || !slot_ids || count == 0) {
+  if (keys == nullptr || values == nullptr || slot_ids == nullptr ||
+      count == 0) {
     return Status::kInvalidArgument;
   }
 
@@ -158,7 +161,7 @@ Status SegmentFile::BatchInsert(const void* keys, const void* values,
     return Status::kIOError;
   }
 
-  uint32_t available = total_slots_ - append_cursor_;
+  const uint32_t available = total_slots_ - append_cursor_;
   if (count > available) {
     return Status::kFull;
   }
@@ -166,13 +169,13 @@ Status SegmentFile::BatchInsert(const void* keys, const void* values,
   const auto* key_ptr = static_cast<const uint8_t*>(keys);
   const auto* val_ptr = static_cast<const uint8_t*>(values);
 
-  // Phase 1: write all slot data
+  // Phase 1: write all slot payloads without touching the bitmap.
   for (uint32_t i = 0; i < count; ++i) {
-    uint32_t sid = append_cursor_ + i;
-    uint64_t offset = GetSlotOffset(sid);
+    const uint32_t sid = append_cursor_ + i;
+    const uint64_t offset = GetSlotOffset(sid);
 
-    auto s = PWrite(key_ptr + static_cast<size_t>(i) * config_.key_size,
-                    config_.key_size, offset);
+    Status s = PWrite(key_ptr + static_cast<size_t>(i) * config_.key_size,
+                      config_.key_size, offset);
     if (s != Status::kOk) {
       return s;
     }
@@ -186,12 +189,12 @@ Status SegmentFile::BatchInsert(const void* keys, const void* values,
     slot_ids[i] = sid;
   }
 
-  // Phase 2: update bitmap for all slots
+  // Phase 2: commit bitmap so readers never observe a partial batch.
   for (uint32_t i = 0; i < count; ++i) {
     SetSlotBit(slot_ids[i]);
   }
 
-  auto s = FlushBitmap();
+  const Status s = FlushBitmap();
   if (s != Status::kOk) {
     return s;
   }
@@ -217,17 +220,18 @@ Status SegmentFile::Read(uint32_t slot_id, void* key, void* value) {
     return Status::kNotFound;
   }
 
-  uint64_t offset = GetSlotOffset(slot_id);
+  const uint64_t offset = GetSlotOffset(slot_id);
 
-  if (key) {
-    auto s = PRead(key, config_.key_size, offset);
+  if (key != nullptr) {
+    const Status s = PRead(key, config_.key_size, offset);
     if (s != Status::kOk) {
       return s;
     }
   }
 
-  if (value) {
-    auto s = PRead(value, config_.value_size, offset + config_.key_size);
+  if (value != nullptr) {
+    const Status s =
+        PRead(value, config_.value_size, offset + config_.key_size);
     if (s != Status::kOk) {
       return s;
     }
@@ -250,9 +254,10 @@ Status SegmentFile::Delete(uint32_t slot_id) {
     return Status::kNotFound;
   }
 
-  // Clear bitmap bit, then flush
+  // Clear bitmap bit, then flush; roll back on IO failure so the in-memory
+  // bitmap stays consistent with what's on disk.
   ClearSlotBit(slot_id);
-  auto s = FlushBitmap();
+  const Status s = FlushBitmap();
   if (s != Status::kOk) {
     SetSlotBit(slot_id);
     return s;
@@ -267,7 +272,7 @@ Status SegmentFile::Delete(uint32_t slot_id) {
 }
 
 Status SegmentFile::Compact(SegmentBase* target) {
-  if (!target) {
+  if (target == nullptr) {
     return Status::kInvalidArgument;
   }
 
@@ -284,8 +289,8 @@ Status SegmentFile::Compact(SegmentBase* target) {
       continue;
     }
 
-    uint64_t offset = GetSlotOffset(i);
-    auto s = PRead(key_buf.data(), config_.key_size, offset);
+    const uint64_t offset = GetSlotOffset(i);
+    Status s = PRead(key_buf.data(), config_.key_size, offset);
     if (s != Status::kOk) {
       return s;
     }
@@ -295,20 +300,16 @@ Status SegmentFile::Compact(SegmentBase* target) {
       return s;
     }
 
-    uint32_t new_slot_id;
+    uint32_t new_slot_id = 0;
     s = target->Insert(key_buf.data(), val_buf.data(), &new_slot_id);
     if (s != Status::kOk) {
       return s;
     }
-
-    return Status::kOk
   }
 
-  // Reset this segment to IDLE
+  // After migration, reset this segment so the manager can recycle it.
   ResetBitmap();
-  auto s = FlushBitmap();
-
-  return s;
+  return FlushBitmap();
 }
 
 Status SegmentFile::SyncBitmap() {
@@ -324,19 +325,17 @@ Status SegmentFile::PWrite(const void* buf, size_t count, uint64_t offset) {
   const auto* ptr = static_cast<const char*>(buf);
   size_t remaining = count;
   while (remaining > 0) {
-    ssize_t written = ::pwrite(fd_, ptr, remaining, offset);
+    const ssize_t written = ::pwrite(fd_, ptr, remaining, offset);
     if (written < 0) {
       if (errno == EINTR) {
         continue;
       }
-
       return Status::kIOError;
     }
     ptr += written;
     offset += written;
     remaining -= written;
   }
-
   return Status::kOk;
 }
 
@@ -344,24 +343,20 @@ Status SegmentFile::PRead(void* buf, size_t count, uint64_t offset) {
   auto* ptr = static_cast<char*>(buf);
   size_t remaining = count;
   while (remaining > 0) {
-    ssize_t nread = ::pread(fd_, ptr, remaining, offset);
+    const ssize_t nread = ::pread(fd_, ptr, remaining, offset);
     if (nread < 0) {
       if (errno == EINTR) {
         continue;
       }
-
       return Status::kIOError;
     }
-
     if (nread == 0) {
       return Status::kCorruption;
     }
-
     ptr += nread;
     offset += nread;
     remaining -= nread;
   }
-
   return Status::kOk;
 }
 

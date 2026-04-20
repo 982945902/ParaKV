@@ -22,6 +22,9 @@ class ParaKvServer {
  public:
   ParaKvServer();
   ~ParaKvServer();
+
+  ParaKvServer(const ParaKvServer&) = delete;
+  ParaKvServer& operator=(const ParaKvServer&) = delete;
 };
 
 }  // namespace server

@@ -26,17 +26,17 @@ SegmentManager::SegmentManager(const SegmentConfig& config) : config_(config) {}
 SegmentManager::~SegmentManager() = default;
 
 Status SegmentManager::AddSegment(std::shared_ptr<SegmentBase> segment) {
-  if (!segment) {
+  if (segment == nullptr) {
     return Status::kInvalidArgument;
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  uint32_t id = segment->GetSegmentId();
-  if (segments_.count(id)) {
+  const uint32_t id = segment->GetSegmentId();
+  if (segments_.count(id) != 0) {
     return Status::kInvalidArgument;
   }
 
-  SegmentState state = segment->GetState();
+  const SegmentState state = segment->GetState();
   segments_[id] = std::move(segment);
 
   switch (state) {
@@ -57,15 +57,15 @@ Status SegmentManager::AddSegment(std::shared_ptr<SegmentBase> segment) {
 std::shared_ptr<SegmentBase> SegmentManager::GetActiveSegment() {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  // Try to find an existing APPENDING segment with free slots
-  for (uint32_t id : appending_set_) {
+  // Prefer an existing APPENDING segment that still has free slots.
+  for (const uint32_t id : appending_set_) {
     auto seg = segments_[id];
     if (seg->GetFreeSlots() > 0) {
       return seg;
     }
   }
 
-  // Promote an IDLE segment
+  // Otherwise, promote an IDLE segment to APPENDING.
   return PromoteIdleSegment();
 }
 
@@ -100,7 +100,7 @@ std::shared_ptr<SegmentBase> SegmentManager::PromoteIdleSegment() {
     return nullptr;
   }
 
-  uint32_t id = *idle_set_.begin();
+  const uint32_t id = *idle_set_.begin();
   idle_set_.erase(id);
   appending_set_.insert(id);
 
@@ -112,9 +112,11 @@ Status SegmentManager::RunCompaction() {
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (uint32_t id : full_set_) {
-      // Skip hot segments
-      if (hot_segments_.count(id)) continue;
+    for (const uint32_t id : full_set_) {
+      // Skip hot segments: they serve reads and shouldn't be rewritten.
+      if (hot_segments_.count(id) != 0) {
+        continue;
+      }
       auto seg = segments_[id];
       if (seg->NeedsCompaction()) {
         candidates.push_back(id);
@@ -122,9 +124,9 @@ Status SegmentManager::RunCompaction() {
     }
   }
 
-  for (uint32_t src_id : candidates) {
+  for (const uint32_t src_id : candidates) {
     auto active = GetActiveSegment();
-    if (!active) {
+    if (active == nullptr) {
       return Status::kNoSpace;
     }
 
@@ -135,24 +137,23 @@ Status SegmentManager::RunCompaction() {
       if (it == segments_.end()) {
         continue;
       }
-
       src = it->second;
     }
 
-    auto s = src->Compact(active.get());
+    const Status s = src->Compact(active.get());
     if (s != Status::kOk) {
       return s;
     }
 
-    // Move source segment to IDLE
+    // Move source segment to IDLE so it can be recycled.
     {
       std::lock_guard<std::mutex> lock(mutex_);
       full_set_.erase(src_id);
       idle_set_.insert(src_id);
 
-      // Reclassify target based on its current state
-      uint32_t target_id = active->GetSegmentId();
-      SegmentState new_state = active->GetState();
+      // Reclassify the target segment based on its post-compact state.
+      const uint32_t target_id = active->GetSegmentId();
+      const SegmentState new_state = active->GetState();
       if (new_state == SegmentState::FULL) {
         appending_set_.erase(target_id);
         full_set_.insert(target_id);
@@ -173,34 +174,34 @@ Status SegmentManager::EvaluateHotCold(uint64_t hot_threshold,
                                        uint32_t max_hot_segments) {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  // Promote cold -> hot
-  for (auto& [id, count] : access_counters_) {
-    if (count >= hot_threshold && !hot_segments_.count(id) &&
+  // Promote cold -> hot.
+  for (const auto& [id, count] : access_counters_) {
+    if (count >= hot_threshold && hot_segments_.count(id) == 0 &&
         hot_segments_.size() < max_hot_segments) {
       hot_segments_.insert(id);
     }
   }
 
-  // Demote hot segments whose access dropped below threshold
+  // Demote hot segments whose access dropped below threshold. A demoted
+  // segment with a high deletion ratio becomes a compaction candidate on
+  // the next RunCompaction() call.
   std::vector<uint32_t> to_demote;
-  for (uint32_t id : hot_segments_) {
+  for (const uint32_t id : hot_segments_) {
     auto it = access_counters_.find(id);
     if (it == access_counters_.end() || it->second < hot_threshold) {
       to_demote.push_back(id);
     }
   }
-  for (uint32_t id : to_demote) {
+  for (const uint32_t id : to_demote) {
     hot_segments_.erase(id);
-    // If the demoted segment has high deletion ratio, it becomes
-    // a compaction candidate on the next RunCompaction() call.
   }
 
-  // Enforce memory budget: if too many hot segments, evict least-accessed
+  // Enforce memory budget by evicting the least-accessed hot segments.
   while (hot_segments_.size() > max_hot_segments) {
     uint32_t victim = 0;
     uint64_t min_count = UINT64_MAX;
-    for (uint32_t id : hot_segments_) {
-      uint64_t c = access_counters_[id];
+    for (const uint32_t id : hot_segments_) {
+      const uint64_t c = access_counters_[id];
       if (c < min_count) {
         min_count = c;
         victim = id;
@@ -209,7 +210,7 @@ Status SegmentManager::EvaluateHotCold(uint64_t hot_threshold,
     hot_segments_.erase(victim);
   }
 
-  // Reset counters for next evaluation window
+  // Reset counters for the next evaluation window.
   access_counters_.clear();
 
   return Status::kOk;
@@ -217,25 +218,21 @@ Status SegmentManager::EvaluateHotCold(uint64_t hot_threshold,
 
 bool SegmentManager::IsHotSegment(uint32_t segment_id) const {
   std::lock_guard<std::mutex> lock(mutex_);
-
   return hot_segments_.count(segment_id) > 0;
 }
 
 uint32_t SegmentManager::GetTotalSegments() const {
   std::lock_guard<std::mutex> lock(mutex_);
-
   return static_cast<uint32_t>(segments_.size());
 }
 
 uint32_t SegmentManager::GetIdleSegments() const {
   std::lock_guard<std::mutex> lock(mutex_);
-
   return static_cast<uint32_t>(idle_set_.size());
 }
 
 uint32_t SegmentManager::GetFullSegments() const {
   std::lock_guard<std::mutex> lock(mutex_);
-
   return static_cast<uint32_t>(full_set_.size());
 }
 
