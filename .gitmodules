@@ -7,3 +7,6 @@
 [submodule "third_party/cpprestsdk"]
 	path = third_party/cpprestsdk
 	url = https://gitcode.com/xLLM-AI/cpprestsdk.git
+[submodule "third_party/parallel-hashmap"]
+	path = third_party/parallel-hashmap
+	url = https://gitcode.com/xLLM-AI/parallel-hashmap.git

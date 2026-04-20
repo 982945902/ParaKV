@@ -51,14 +51,14 @@ class SegmentManager {
   SegmentManager& operator=(const SegmentManager&) = delete;
 
   // Register an externally created segment.
-  Status AddSegment(std::unique_ptr<SegmentBase> segment);
+  Status AddSegment(std::shared_ptr<SegmentBase> segment);
 
   // Returns an APPENDING segment that has free slots.
   // If none exists, promotes an IDLE segment.
-  SegmentBase* GetActiveSegment();
+  std::shared_ptr<SegmentBase> GetActiveSegment();
 
   // Return segment by id.
-  SegmentBase* GetSegment(uint32_t segment_id);
+  std::shared_ptr<SegmentBase> GetSegment(uint32_t segment_id);
 
   // Release a segment to IDLE pool (after compaction).
   Status ReleaseSegment(uint32_t segment_id);
@@ -90,13 +90,13 @@ class SegmentManager {
   uint32_t GetFullSegments() const;
 
  private:
-  SegmentBase* PromoteIdleSegment();
+  std::shared_ptr<SegmentBase> PromoteIdleSegment();
 
   SegmentConfig config_;
 
   mutable std::mutex mutex_;
 
-  std::unordered_map<uint32_t, std::unique_ptr<SegmentBase>> segments_;
+  std::unordered_map<uint32_t, std::shared_ptr<SegmentBase>> segments_;
 
   std::unordered_set<uint32_t> idle_set_;
   std::unordered_set<uint32_t> appending_set_;

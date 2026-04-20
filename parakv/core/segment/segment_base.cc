@@ -86,7 +86,10 @@ uint32_t SegmentBase::GetDeletedSlots() const {
 
 double SegmentBase::GetDeletedRatio() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (append_cursor_ == 0) return 0.0;
+  if (append_cursor_ == 0) {
+    return 0.0;
+  }
+
   return static_cast<double>(deleted_slots_) / append_cursor_;
 }
 
@@ -121,6 +124,7 @@ int32_t SegmentBase::FindFreeSlot() const {
   if (append_cursor_ < total_slots_) {
     return static_cast<int32_t>(append_cursor_);
   }
+
   return -1;
 }
 

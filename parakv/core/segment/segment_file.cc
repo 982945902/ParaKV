@@ -33,7 +33,9 @@ SegmentFile::~SegmentFile() { Close(); }
 
 Status SegmentFile::Open() {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (fd_ >= 0) return Status::kOk;
+  if (fd_ >= 0) {
+    return Status::kOk;
+  }
 
   struct stat st;
   bool file_exists = (::stat(file_path_.c_str(), &st) == 0);
@@ -44,7 +46,9 @@ Status SegmentFile::Open() {
   }
 
   fd_ = ::open(file_path_.c_str(), flags, 0644);
-  if (fd_ < 0) return Status::kIOError;
+  if (fd_ < 0) {
+    return Status::kIOError;
+  }
 
   if (!file_exists) {
     if (::ftruncate(fd_, config_.segment_size) != 0) {
@@ -79,39 +83,53 @@ Status SegmentFile::Open() {
     deleted_slots_ = append_cursor_ - used_slots_;
     UpdateState();
   }
+
   return Status::kOk;
 }
 
 Status SegmentFile::Close() {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (fd_ < 0) return Status::kOk;
+  if (fd_ < 0) {
+    return Status::kOk;
+  }
 
   FlushBitmap();
   ::fsync(fd_);
   ::close(fd_);
   fd_ = -1;
+
   return Status::kOk;
 }
 
 Status SegmentFile::Insert(const void* key, const void* value,
                            uint32_t* slot_id) {
-  if (!key || !value || !slot_id) return Status::kInvalidArgument;
+  if (!key || !value || !slot_id) {
+    return Status::kInvalidArgument;
+  }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  if (fd_ < 0) return Status::kIOError;
+  if (fd_ < 0) {
+    return Status::kIOError;
+  }
 
   int32_t free_slot = FindFreeSlot();
-  if (free_slot < 0) return Status::kFull;
+  if (free_slot < 0) {
+    return Status::kFull;
+  }
 
   uint32_t sid = static_cast<uint32_t>(free_slot);
   uint64_t offset = GetSlotOffset(sid);
 
   // Write key then value (append-only)
   auto s = PWrite(key, config_.key_size, offset);
-  if (s != Status::kOk) return s;
+  if (s != Status::kOk) {
+    return s;
+  }
 
   s = PWrite(value, config_.value_size, offset + config_.key_size);
-  if (s != Status::kOk) return s;
+  if (s != Status::kOk) {
+    return s;
+  }
 
   // Update bitmap on disk, then in memory
   SetSlotBit(sid);
@@ -125,6 +143,7 @@ Status SegmentFile::Insert(const void* key, const void* value,
   ++append_cursor_;
   *slot_id = sid;
   UpdateState();
+
   return Status::kOk;
 }
 
@@ -135,10 +154,14 @@ Status SegmentFile::BatchInsert(const void* keys, const void* values,
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  if (fd_ < 0) return Status::kIOError;
+  if (fd_ < 0) {
+    return Status::kIOError;
+  }
 
   uint32_t available = total_slots_ - append_cursor_;
-  if (count > available) return Status::kFull;
+  if (count > available) {
+    return Status::kFull;
+  }
 
   const auto* key_ptr = static_cast<const uint8_t*>(keys);
   const auto* val_ptr = static_cast<const uint8_t*>(values);
@@ -150,11 +173,15 @@ Status SegmentFile::BatchInsert(const void* keys, const void* values,
 
     auto s = PWrite(key_ptr + static_cast<size_t>(i) * config_.key_size,
                     config_.key_size, offset);
-    if (s != Status::kOk) return s;
+    if (s != Status::kOk) {
+      return s;
+    }
 
     s = PWrite(val_ptr + static_cast<size_t>(i) * config_.value_size,
                config_.value_size, offset + config_.key_size);
-    if (s != Status::kOk) return s;
+    if (s != Status::kOk) {
+      return s;
+    }
 
     slot_ids[i] = sid;
   }
@@ -165,40 +192,63 @@ Status SegmentFile::BatchInsert(const void* keys, const void* values,
   }
 
   auto s = FlushBitmap();
-  if (s != Status::kOk) return s;
+  if (s != Status::kOk) {
+    return s;
+  }
 
   used_slots_ += count;
   append_cursor_ += count;
   UpdateState();
+
   return Status::kOk;
 }
 
 Status SegmentFile::Read(uint32_t slot_id, void* key, void* value) {
-  if (slot_id >= total_slots_) return Status::kInvalidArgument;
+  if (slot_id >= total_slots_) {
+    return Status::kInvalidArgument;
+  }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  if (fd_ < 0) return Status::kIOError;
-  if (!IsSlotOccupied(slot_id)) return Status::kNotFound;
+  if (fd_ < 0) {
+    return Status::kIOError;
+  }
+
+  if (!IsSlotOccupied(slot_id)) {
+    return Status::kNotFound;
+  }
 
   uint64_t offset = GetSlotOffset(slot_id);
 
   if (key) {
     auto s = PRead(key, config_.key_size, offset);
-    if (s != Status::kOk) return s;
+    if (s != Status::kOk) {
+      return s;
+    }
   }
+
   if (value) {
     auto s = PRead(value, config_.value_size, offset + config_.key_size);
-    if (s != Status::kOk) return s;
+    if (s != Status::kOk) {
+      return s;
+    }
   }
+
   return Status::kOk;
 }
 
 Status SegmentFile::Delete(uint32_t slot_id) {
-  if (slot_id >= total_slots_) return Status::kInvalidArgument;
+  if (slot_id >= total_slots_) {
+    return Status::kInvalidArgument;
+  }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  if (fd_ < 0) return Status::kIOError;
-  if (!IsSlotOccupied(slot_id)) return Status::kNotFound;
+  if (fd_ < 0) {
+    return Status::kIOError;
+  }
+
+  if (!IsSlotOccupied(slot_id)) {
+    return Status::kNotFound;
+  }
 
   // Clear bitmap bit, then flush
   ClearSlotBit(slot_id);
@@ -212,42 +262,61 @@ Status SegmentFile::Delete(uint32_t slot_id) {
   --used_slots_;
   ++deleted_slots_;
   UpdateState();
+
   return Status::kOk;
 }
 
 Status SegmentFile::Compact(SegmentBase* target) {
-  if (!target) return Status::kInvalidArgument;
+  if (!target) {
+    return Status::kInvalidArgument;
+  }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  if (fd_ < 0) return Status::kIOError;
+  if (fd_ < 0) {
+    return Status::kIOError;
+  }
 
   std::vector<uint8_t> key_buf(config_.key_size);
   std::vector<uint8_t> val_buf(config_.value_size);
 
   for (uint32_t i = 0; i < append_cursor_; ++i) {
-    if (!IsSlotOccupied(i)) continue;
+    if (!IsSlotOccupied(i)) {
+      continue;
+    }
 
     uint64_t offset = GetSlotOffset(i);
     auto s = PRead(key_buf.data(), config_.key_size, offset);
-    if (s != Status::kOk) return s;
+    if (s != Status::kOk) {
+      return s;
+    }
 
     s = PRead(val_buf.data(), config_.value_size, offset + config_.key_size);
-    if (s != Status::kOk) return s;
+    if (s != Status::kOk) {
+      return s;
+    }
 
     uint32_t new_slot_id;
     s = target->Insert(key_buf.data(), val_buf.data(), &new_slot_id);
-    if (s != Status::kOk) return s;
+    if (s != Status::kOk) {
+      return s;
+    }
+
+    return Status::kOk
   }
 
   // Reset this segment to IDLE
   ResetBitmap();
   auto s = FlushBitmap();
+
   return s;
 }
 
 Status SegmentFile::SyncBitmap() {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (fd_ < 0) return Status::kIOError;
+  if (fd_ < 0) {
+    return Status::kIOError;
+  }
+
   return FlushBitmap();
 }
 
@@ -257,13 +326,17 @@ Status SegmentFile::PWrite(const void* buf, size_t count, uint64_t offset) {
   while (remaining > 0) {
     ssize_t written = ::pwrite(fd_, ptr, remaining, offset);
     if (written < 0) {
-      if (errno == EINTR) continue;
+      if (errno == EINTR) {
+        continue;
+      }
+
       return Status::kIOError;
     }
     ptr += written;
     offset += written;
     remaining -= written;
   }
+
   return Status::kOk;
 }
 
@@ -273,14 +346,22 @@ Status SegmentFile::PRead(void* buf, size_t count, uint64_t offset) {
   while (remaining > 0) {
     ssize_t nread = ::pread(fd_, ptr, remaining, offset);
     if (nread < 0) {
-      if (errno == EINTR) continue;
+      if (errno == EINTR) {
+        continue;
+      }
+
       return Status::kIOError;
     }
-    if (nread == 0) return Status::kCorruption;
+
+    if (nread == 0) {
+      return Status::kCorruption;
+    }
+
     ptr += nread;
     offset += nread;
     remaining -= nread;
   }
+
   return Status::kOk;
 }
 

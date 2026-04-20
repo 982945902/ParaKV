@@ -25,12 +25,16 @@ SegmentManager::SegmentManager(const SegmentConfig& config) : config_(config) {}
 
 SegmentManager::~SegmentManager() = default;
 
-Status SegmentManager::AddSegment(std::unique_ptr<SegmentBase> segment) {
-  if (!segment) return Status::kInvalidArgument;
+Status SegmentManager::AddSegment(std::shared_ptr<SegmentBase> segment) {
+  if (!segment) {
+    return Status::kInvalidArgument;
+  }
 
   std::lock_guard<std::mutex> lock(mutex_);
   uint32_t id = segment->GetSegmentId();
-  if (segments_.count(id)) return Status::kInvalidArgument;
+  if (segments_.count(id)) {
+    return Status::kInvalidArgument;
+  }
 
   SegmentState state = segment->GetState();
   segments_[id] = std::move(segment);
@@ -46,49 +50,61 @@ Status SegmentManager::AddSegment(std::unique_ptr<SegmentBase> segment) {
       full_set_.insert(id);
       break;
   }
+
   return Status::kOk;
 }
 
-SegmentBase* SegmentManager::GetActiveSegment() {
+std::shared_ptr<SegmentBase> SegmentManager::GetActiveSegment() {
   std::lock_guard<std::mutex> lock(mutex_);
 
   // Try to find an existing APPENDING segment with free slots
   for (uint32_t id : appending_set_) {
-    auto* seg = segments_[id].get();
-    if (seg->GetFreeSlots() > 0) return seg;
+    auto seg = segments_[id];
+    if (seg->GetFreeSlots() > 0) {
+      return seg;
+    }
   }
 
   // Promote an IDLE segment
   return PromoteIdleSegment();
 }
 
-SegmentBase* SegmentManager::GetSegment(uint32_t segment_id) {
+std::shared_ptr<SegmentBase> SegmentManager::GetSegment(uint32_t segment_id) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = segments_.find(segment_id);
-  if (it == segments_.end()) return nullptr;
-  return it->second.get();
+  if (it == segments_.end()) {
+    return nullptr;
+  }
+
+  return it->second;
 }
 
 Status SegmentManager::ReleaseSegment(uint32_t segment_id) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = segments_.find(segment_id);
-  if (it == segments_.end()) return Status::kNotFound;
+  if (it == segments_.end()) {
+    return Status::kNotFound;
+  }
 
   appending_set_.erase(segment_id);
   full_set_.erase(segment_id);
   hot_segments_.erase(segment_id);
   access_counters_.erase(segment_id);
   idle_set_.insert(segment_id);
+
   return Status::kOk;
 }
 
-SegmentBase* SegmentManager::PromoteIdleSegment() {
-  if (idle_set_.empty()) return nullptr;
+std::shared_ptr<SegmentBase> SegmentManager::PromoteIdleSegment() {
+  if (idle_set_.empty()) {
+    return nullptr;
+  }
 
   uint32_t id = *idle_set_.begin();
   idle_set_.erase(id);
   appending_set_.insert(id);
-  return segments_[id].get();
+
+  return segments_[id];
 }
 
 Status SegmentManager::RunCompaction() {
@@ -99,7 +115,7 @@ Status SegmentManager::RunCompaction() {
     for (uint32_t id : full_set_) {
       // Skip hot segments
       if (hot_segments_.count(id)) continue;
-      auto* seg = segments_[id].get();
+      auto seg = segments_[id];
       if (seg->NeedsCompaction()) {
         candidates.push_back(id);
       }
@@ -107,19 +123,26 @@ Status SegmentManager::RunCompaction() {
   }
 
   for (uint32_t src_id : candidates) {
-    SegmentBase* active = GetActiveSegment();
-    if (!active) return Status::kNoSpace;
+    auto active = GetActiveSegment();
+    if (!active) {
+      return Status::kNoSpace;
+    }
 
-    SegmentBase* src = nullptr;
+    std::shared_ptr<SegmentBase> src;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       auto it = segments_.find(src_id);
-      if (it == segments_.end()) continue;
-      src = it->second.get();
+      if (it == segments_.end()) {
+        continue;
+      }
+
+      src = it->second;
     }
 
-    auto s = src->Compact(active);
-    if (s != Status::kOk) return s;
+    auto s = src->Compact(active.get());
+    if (s != Status::kOk) {
+      return s;
+    }
 
     // Move source segment to IDLE
     {
@@ -136,11 +159,13 @@ Status SegmentManager::RunCompaction() {
       }
     }
   }
+
   return Status::kOk;
 }
 
 void SegmentManager::RecordAccess(uint32_t segment_id) {
   std::lock_guard<std::mutex> lock(mutex_);
+
   access_counters_[segment_id]++;
 }
 
@@ -192,21 +217,25 @@ Status SegmentManager::EvaluateHotCold(uint64_t hot_threshold,
 
 bool SegmentManager::IsHotSegment(uint32_t segment_id) const {
   std::lock_guard<std::mutex> lock(mutex_);
+
   return hot_segments_.count(segment_id) > 0;
 }
 
 uint32_t SegmentManager::GetTotalSegments() const {
   std::lock_guard<std::mutex> lock(mutex_);
+
   return static_cast<uint32_t>(segments_.size());
 }
 
 uint32_t SegmentManager::GetIdleSegments() const {
   std::lock_guard<std::mutex> lock(mutex_);
+
   return static_cast<uint32_t>(idle_set_.size());
 }
 
 uint32_t SegmentManager::GetFullSegments() const {
   std::lock_guard<std::mutex> lock(mutex_);
+
   return static_cast<uint32_t>(full_set_.size());
 }
 
