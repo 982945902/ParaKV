@@ -37,11 +37,6 @@ struct HotSegmentInfo {
   std::vector<uint8_t> cached_data;
 };
 
-// Callback to notify the index layer when a slot moves during compaction.
-// Parameters: old_segment_id, old_slot_id, new_segment_id, new_slot_id
-using SlotMoveCallback =
-    std::function<void(uint32_t, uint32_t, uint32_t, uint32_t)>;
-
 class SegmentManager {
  public:
   explicit SegmentManager(const SegmentConfig& config);

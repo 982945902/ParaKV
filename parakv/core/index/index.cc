@@ -51,14 +51,25 @@ std::string SnapshotTmpPath(const std::string& dir) {
 
 }  // namespace
 
-Index::Index(Options opts)
+template <typename KeyT, typename Hash, typename Eq>
+Index<KeyT, Hash, Eq>::Index(Options opts)
     : opts_(std::move(opts)), wal_bytes_(0), opened_(false) {}
 
-Index::~Index() { Close(); }
+template <typename KeyT, typename Hash, typename Eq>
+Index<KeyT, Hash, Eq>::~Index() {
+  Close();
+}
 
-Status Index::Open() {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::Open() {
   if (opened_.exchange(true)) {
     return Status::kOk;
+  }
+
+  // The segment layer stores raw bytes; its configured key size must match
+  // the index's compile-time KeyT so that slots round-trip losslessly.
+  if (opts_.segment_config.key_size != sizeof(KeyT)) {
+    return Status::kInvalidArgument;
   }
 
   // 1. Load snapshot if present.
@@ -79,7 +90,8 @@ Status Index::Open() {
     if (s != Status::kOk) {
       return s;
     }
-    s = reader.Replay([this](const WalRecord& rec) { ApplyRecord(rec); });
+    s = reader.template Replay<KeyT>(
+        [this](const WalRecord<KeyT>& rec) { ApplyRecord(rec); });
     if (s != Status::kOk) {
       reader.Close();
       return s;
@@ -107,7 +119,8 @@ Status Index::Open() {
   return Status::kOk;
 }
 
-Status Index::Close() {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::Close() {
   if (!opened_.exchange(false)) {
     return Status::kOk;
   }
@@ -118,7 +131,9 @@ Status Index::Close() {
   return Status::kOk;
 }
 
-Status Index::Put(uint64_t key, const void* value, size_t value_size) {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::Put(const KeyT& key, const void* value,
+                                  size_t value_size) {
   if (value == nullptr) {
     return Status::kInvalidArgument;
   }
@@ -141,7 +156,7 @@ Status Index::Put(uint64_t key, const void* value, size_t value_size) {
   uint64_t old_enc = 0;
   map_.lazy_emplace_l(
       key,
-      [&](Map::value_type& v) {
+      [&](typename Map::value_type& v) {
         had_old = true;
         old_enc = v.second;
         v.second = new_enc;
@@ -155,7 +170,8 @@ Status Index::Put(uint64_t key, const void* value, size_t value_size) {
   if (wal_s != Status::kOk) {
     // Best-effort rollback: revert the map and free the newly written slot.
     if (had_old) {
-      map_.modify_if(key, [&](Map::value_type& v) { v.second = old_enc; });
+      map_.modify_if(key,
+                     [&](typename Map::value_type& v) { v.second = old_enc; });
     } else {
       map_.erase(key);
     }
@@ -169,7 +185,9 @@ Status Index::Put(uint64_t key, const void* value, size_t value_size) {
   return Status::kOk;
 }
 
-Status Index::Get(uint64_t key, void* value_out, size_t value_size) {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::Get(const KeyT& key, void* value_out,
+                                  size_t value_size) {
   if (value_out == nullptr) {
     return Status::kInvalidArgument;
   }
@@ -200,12 +218,13 @@ Status Index::Get(uint64_t key, void* value_out, size_t value_size) {
   return seg->Read(slot_id, key_buf.data(), value_out);
 }
 
-Status Index::Delete(uint64_t key) {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::Delete(const KeyT& key) {
   // Atomically remove while capturing the previous encoded offset under the
   // sub-map's write lock.
   bool found = false;
   uint64_t old_enc = 0;
-  map_.erase_if(key, [&](const Map::value_type& v) {
+  map_.erase_if(key, [&](const typename Map::value_type& v) {
     found = true;
     old_enc = v.second;
     return true;
@@ -225,19 +244,70 @@ Status Index::Delete(uint64_t key) {
   return Status::kOk;
 }
 
-Status Index::Lookup(uint64_t key, uint64_t* encoded_offset) const {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::Lookup(const KeyT& key,
+                                     uint64_t* encoded_offset) const {
   if (encoded_offset == nullptr) {
     return Status::kInvalidArgument;
   }
   bool found = false;
-  map_.if_contains(key, [&](const Map::value_type& v) {
+  map_.if_contains(key, [&](const typename Map::value_type& v) {
     *encoded_offset = v.second;
     found = true;
   });
   return found ? Status::kOk : Status::kNotFound;
 }
 
-Status Index::Checkpoint() {
+// ---- Raw (type-erased) data path ------------------------------------------
+
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::PutRaw(const void* key_input, size_t key_size,
+                                     const void* value, size_t value_size) {
+  if (key_input == nullptr || key_size != sizeof(KeyT)) {
+    return Status::kInvalidArgument;
+  }
+  KeyT key;
+  std::memcpy(&key, key_input, sizeof(KeyT));
+  return Put(key, value, value_size);
+}
+
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::GetRaw(const void* key_input, size_t key_size,
+                                     void* value_out, size_t value_size) {
+  if (key_input == nullptr || key_size != sizeof(KeyT)) {
+    return Status::kInvalidArgument;
+  }
+  KeyT key;
+  std::memcpy(&key, key_input, sizeof(KeyT));
+  return Get(key, value_out, value_size);
+}
+
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::DeleteRaw(const void* key_input,
+                                        size_t key_size) {
+  if (key_input == nullptr || key_size != sizeof(KeyT)) {
+    return Status::kInvalidArgument;
+  }
+  KeyT key;
+  std::memcpy(&key, key_input, sizeof(KeyT));
+  return Delete(key);
+}
+
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::LookupRaw(const void* key_input, size_t key_size,
+                                        uint64_t* encoded_offset) const {
+  if (key_input == nullptr || key_size != sizeof(KeyT)) {
+    return Status::kInvalidArgument;
+  }
+  KeyT key;
+  std::memcpy(&key, key_input, sizeof(KeyT));
+  return Lookup(key, encoded_offset);
+}
+
+// ---- Persistence ----------------------------------------------------------
+
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::Checkpoint() {
   std::lock_guard<std::mutex> lock(checkpoint_mutex_);
 
   if (opts_.snapshot_dir.empty()) {
@@ -260,7 +330,8 @@ Status Index::Checkpoint() {
   return RotateWal();
 }
 
-Status Index::DumpSnapshot(const std::string& path) const {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::DumpSnapshot(const std::string& path) const {
   phmap::BinaryOutputArchive ar(path.c_str());
   // parallel_flat_hash_map::phmap_dump iterates over all sub-maps, briefly
   // holding each sub-map's lock, so writers on other sub-maps keep running.
@@ -270,7 +341,8 @@ Status Index::DumpSnapshot(const std::string& path) const {
   return Status::kOk;
 }
 
-Status Index::LoadSnapshot(const std::string& path) {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::LoadSnapshot(const std::string& path) {
   phmap::BinaryInputArchive ar(path.c_str());
   Map fresh;
   if (!fresh.phmap_load(ar)) {
@@ -280,34 +352,46 @@ Status Index::LoadSnapshot(const std::string& path) {
   return Status::kOk;
 }
 
-void Index::AttachToSegmentManager() {
+// ---- Compaction integration -----------------------------------------------
+
+template <typename KeyT, typename Hash, typename Eq>
+void Index<KeyT, Hash, Eq>::AttachToSegmentManager() {
   if (opts_.segment_manager == nullptr) {
     return;
   }
+  const std::weak_ptr<Index<KeyT, Hash, Eq>> weak_self = this->weak_from_this();
 
   // When a slot moves during compaction, read the key stored at the new slot
   // to identify the index entry, then rewrite it with the new encoded offset.
-  opts_.segment_manager->SetSlotMoveCallback([this](uint32_t old_seg,
-                                                    uint32_t old_slot,
-                                                    uint32_t new_seg,
-                                                    uint32_t new_slot) {
+  opts_.segment_manager->SetSlotMoveCallback([weak_self](void* key,
+                                                         uint32_t old_seg,
+                                                         uint32_t old_slot,
+                                                         uint32_t new_seg,
+                                                         uint32_t new_slot) {
+    auto self = weak_self.lock();
+    if (!self) {
+      return;
+    }
     const uint64_t old_enc = OffsetCodec::EncodeSegmentSlot(old_seg, old_slot);
     const uint64_t new_enc = OffsetCodec::EncodeSegmentSlot(new_seg, new_slot);
 
-    uint64_t key = 0;
-    if (ReadKeyAtEncoded(new_enc, &key) != Status::kOk) {
-      return;
-    }
+    // KeyT key{};
+    // if (self->ReadKeyAtEncoded(new_enc, &key) != Status::kOk) {
+    //   return;
+    // }
+    KeyT* key_ptr = static_cast<KeyT*>(key);
 
     // Compaction updates must also be durably logged.
-    (void)AppendWal(WalRecordType::kUpdate, key, new_enc, old_enc);
-    (void)RemapIfEquals(key, old_enc, new_enc);
+    (void)self->AppendWal(WalRecordType::kUpdate, *key_ptr, new_enc, old_enc);
+    (void)self->RemapIfEquals(*key_ptr, old_enc, new_enc);
   });
 }
 
-Status Index::RemapIfEquals(uint64_t key, uint64_t old_off, uint64_t new_off) {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::RemapIfEquals(const KeyT& key, uint64_t old_off,
+                                            uint64_t new_off) {
   bool updated = false;
-  map_.modify_if(key, [&](Map::value_type& v) {
+  map_.modify_if(key, [&](typename Map::value_type& v) {
     if (v.second == old_off) {
       v.second = new_off;
       updated = true;
@@ -316,13 +400,22 @@ Status Index::RemapIfEquals(uint64_t key, uint64_t old_off, uint64_t new_off) {
   return updated ? Status::kOk : Status::kNotFound;
 }
 
-size_t Index::Size() const { return map_.size(); }
+// ---- Stats ----------------------------------------------------------------
 
-uint64_t Index::WalBytes() const { return wal_bytes_.load(); }
+template <typename KeyT, typename Hash, typename Eq>
+size_t Index<KeyT, Hash, Eq>::Size() const {
+  return map_.size();
+}
 
-// ------------------------------ internal ------------------------------------
+template <typename KeyT, typename Hash, typename Eq>
+uint64_t Index<KeyT, Hash, Eq>::WalBytes() const {
+  return wal_bytes_.load();
+}
 
-Status Index::FreeSlot(uint64_t encoded) {
+// ---- Internal -------------------------------------------------------------
+
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::FreeSlot(uint64_t encoded) {
   if (OffsetCodec::GetFlag(encoded) != OffsetFlag::kSegmentSlot) {
     return Status::kOk;
   }
@@ -335,8 +428,9 @@ Status Index::FreeSlot(uint64_t encoded) {
   return seg->Delete(slot_id);
 }
 
-Status Index::WriteToSegment(uint64_t key, const void* value,
-                             uint64_t* encoded) {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::WriteToSegment(const KeyT& key, const void* value,
+                                             uint64_t* encoded) {
   auto seg = opts_.segment_manager->GetActiveSegment();
   if (seg == nullptr) {
     return Status::kNoSpace;
@@ -361,12 +455,13 @@ Status Index::WriteToSegment(uint64_t key, const void* value,
   return Status::kOk;
 }
 
-Status Index::ReadKeyAtEncoded(uint64_t encoded, uint64_t* key_out) {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::ReadKeyAtEncoded(uint64_t encoded,
+                                               KeyT* key_out) {
   if (OffsetCodec::GetFlag(encoded) != OffsetFlag::kSegmentSlot) {
     return Status::kInvalidArgument;
   }
-  // This reference implementation only supports uint64_t keys.
-  if (opts_.segment_config.key_size != sizeof(uint64_t)) {
+  if (opts_.segment_config.key_size != sizeof(KeyT)) {
     return Status::kInvalidArgument;
   }
 
@@ -384,17 +479,19 @@ Status Index::ReadKeyAtEncoded(uint64_t encoded, uint64_t* key_out) {
     return s;
   }
 
-  std::memcpy(key_out, key_buf.data(), sizeof(uint64_t));
+  std::memcpy(key_out, key_buf.data(), sizeof(KeyT));
   return Status::kOk;
 }
 
-Status Index::AppendWal(WalRecordType type, uint64_t key, uint64_t disk_addr,
-                        uint64_t old_disk_addr) {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::AppendWal(WalRecordType type, const KeyT& key,
+                                        uint64_t disk_addr,
+                                        uint64_t old_disk_addr) {
   if (wal_ == nullptr) {
     return Status::kOk;
   }
 
-  WalRecord rec;
+  WalRecord<KeyT> rec;
   rec.type = type;
   rec.key = key;
   rec.disk_addr = disk_addr;
@@ -418,7 +515,8 @@ Status Index::AppendWal(WalRecordType type, uint64_t key, uint64_t disk_addr,
   return Status::kOk;
 }
 
-void Index::ApplyRecord(const WalRecord& rec) {
+template <typename KeyT, typename Hash, typename Eq>
+void Index<KeyT, Hash, Eq>::ApplyRecord(const WalRecord<KeyT>& rec) {
   switch (rec.type) {
     case WalRecordType::kInsert:
     case WalRecordType::kUpdate:
@@ -430,7 +528,8 @@ void Index::ApplyRecord(const WalRecord& rec) {
   }
 }
 
-Status Index::RotateWal() {
+template <typename KeyT, typename Hash, typename Eq>
+Status Index<KeyT, Hash, Eq>::RotateWal() {
   if (wal_ == nullptr) {
     return Status::kOk;
   }
@@ -446,6 +545,11 @@ Status Index::RotateWal() {
   wal_bytes_.store(0);
   return Status::kOk;
 }
+
+// Explicit instantiations for the supported key types.  Adding a new key
+// width is a one-line addition below.
+template class Index<Key64>;
+template class Index<Key128, Key128Hash, Key128Eq>;
 
 }  // namespace index
 }  // namespace parakv

@@ -17,3 +17,14 @@ cc_library(
     DEPS
         Threads::Threads
 )
+
+
+cc_test(
+    NAME 
+        segment_test
+    SRCS
+        segment_file_test.cc
+    DEPS
+        :segment
+        GTest::gtest_main
+)

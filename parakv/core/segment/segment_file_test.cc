@@ -13,17 +13,30 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#pragma once
+#include "segment_file.h"
 
-#include <gflags/gflags.h>
+#include <gtest/gtest.h>
 
-DECLARE_uint32(segment_size);
-DECLARE_uint32(segment_count);
-DECLARE_uint32(segment_key_size);
-DECLARE_uint32(segment_value_size);
-DECLARE_uint32(segment_bitmap_alignment);
-DECLARE_double(segment_compaction_threshold);
-DECLARE_uint32(segment_hot_threshold);
-DECLARE_uint32(segment_max_hot_count);
-DECLARE_uint32(segment_flush_interval_ms);
-DECLARE_string(segement_workspace_path);
+#include "common/status.h"
+
+namespace parakv {
+namespace segment {
+
+class SegmentFileTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    segment_file_ =
+        std::make_unique<SegmentFile>(1, SegmentConfig(), "test.dat");
+  }
+
+  void TearDown() override { segment_file_->Close(); }
+
+  std::unique_ptr<SegmentFile> segment_file_;
+};
+
+TEST_F(SegmentFileTest, TestOpen) {
+  ASSERT_EQ(segment_file_->Open(), Status::kOk);
+}
+
+}  // namespace segment
+}  // namespace parakv

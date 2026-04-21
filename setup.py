@@ -27,7 +27,7 @@ from utils import (
     read_readme,
 )
 
-BUILD_TEST_FILE: bool = False
+BUILD_TEST_FILE: bool = True
 BUILD_EXPORT: bool = False
 
 def get_cxx_abi() -> bool:

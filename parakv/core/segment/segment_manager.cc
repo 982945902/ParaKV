@@ -140,7 +140,13 @@ Status SegmentManager::RunCompaction() {
       src = it->second;
     }
 
-    const Status s = src->Compact(active.get());
+    const Status s = src->Compact(
+        active.get(), [this](void* key, uint32_t old_seg, uint32_t old_slot,
+                             uint32_t new_seg, uint32_t new_slot) {
+          if (slot_move_cb_) {
+            slot_move_cb_(key, old_seg, old_slot, new_seg, new_slot);
+          }
+        });
     if (s != Status::kOk) {
       return s;
     }

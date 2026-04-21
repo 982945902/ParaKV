@@ -21,7 +21,9 @@ limitations under the License.
 #include <memory>
 #include <mutex>
 #include <string>
+#include <type_traits>
 
+#include "parakv/core/index/key.h"
 #include "parakv/core/index/offset.h"
 #include "parakv/core/index/wal.h"
 #include "parakv/core/segment/segment_base.h"
@@ -31,18 +33,24 @@ limitations under the License.
 namespace parakv {
 namespace index {
 
-using segment::Status;
-
 // ---------------------------------------------------------------------------
 // In-memory index for ParaKV.
 //
-// Design (see docs/zh/design/index.md):
-//   Map: key (uint64_t)  ->  encoded offset (uint64_t)
+// The class is parameterised on the user key type:
 //
-// The underlying container is phmap::parallel_flat_hash_map with 2^N internal
-// sub-maps, each guarded by its own std::mutex.  This gives near-linear
-// scalability on multi-core workloads because different keys (hashing to
-// different sub-maps) never contend.
+//   Index<Key64>   -- parameter-server-style workloads (64-bit id / sign)
+//   Index<Key128>  -- LLM KVCache workloads (128-bit prefix hash)
+//
+// |KeyT| must be trivially copyable so that the raw bytes can be written
+// into segment slots and WAL records without any serialization step.
+//
+// Design (see docs/zh/design/index.md):
+//   Map: KeyT  ->  encoded offset (uint64_t)
+//
+// The underlying container is phmap::parallel_flat_hash_map_m with 2^N
+// internal sub-maps, each guarded by its own std::mutex.  This gives
+// near-linear scalability on multi-core workloads because different keys
+// (hashing to different sub-maps) never contend.
 //
 // The index is paired with a segment::SegmentManager that owns the actual
 // key/value bytes:
@@ -56,11 +64,23 @@ using segment::Status;
 //     6. if Update, free old slot on the old segment
 //
 // Crash recovery:
-//   Load(snapshot) + Replay(wal) reconstructs the map.  Snapshot uses phmap's
-//   BinaryOutputArchive; WAL format is in wal.h.
+//   Load(snapshot) + Replay(wal) reconstructs the map.
+//
+// Raw API:
+//   PutRaw / GetRaw / DeleteRaw accept (const void*, size_t) and are the
+//   recommended entry point for RPC handlers that do not statically know
+//   the key type.  |key_size| is validated against sizeof(KeyT) at runtime.
 // ---------------------------------------------------------------------------
-class Index {
+template <typename KeyT = Key64,
+          typename Hash = phmap::priv::hash_default_hash<KeyT>,
+          typename Eq = phmap::priv::hash_default_eq<KeyT>>
+class Index : public std::enable_shared_from_this<Index<KeyT, Hash, Eq>> {
  public:
+  static_assert(std::is_trivially_copyable<KeyT>::value,
+                "Index KeyT must be trivially copyable");
+
+  using key_type = KeyT;
+
   struct Options {
     // Segment storage backing this index.  Must outlive the Index.
     std::shared_ptr<segment::SegmentManager> segment_manager;
@@ -68,8 +88,8 @@ class Index {
     // Path to the WAL file.  If empty, the index runs without WAL (volatile).
     std::string wal_path;
 
-    // Default config describing slot key/value sizes.  Used to size read/write
-    // buffers and to sanity-check Put() payloads.
+    // Config describing slot key/value sizes.  |segment_config.key_size|
+    // must equal sizeof(KeyT); this is checked at Open() time.
     segment::SegmentConfig segment_config;
 
     // Rotate the WAL (checkpoint) once it grows beyond this many bytes.
@@ -91,23 +111,42 @@ class Index {
   // in-memory map.  Safe to call once per Index instance.
   Status Open();
 
-  // Flush WAL + close.
+  // Flush WAL and close the writer.
   Status Close();
 
-  // ---- Data path ----------------------------------------------------------
+  // ---- Typed data path ----------------------------------------------------
 
-  // Write value to an active segment, update index, persist via WAL.
-  // |value_size| must equal segment_config.value_size.
-  Status Put(uint64_t key, const void* value, size_t value_size);
+  // Write |value| to an active segment, update the index, persist via WAL.
+  Status Put(const KeyT& key, const void* value, size_t value_size);
 
   // Read value for |key| into |value_out|.  |value_size| must match config.
-  Status Get(uint64_t key, void* value_out, size_t value_size);
+  Status Get(const KeyT& key, void* value_out, size_t value_size);
 
   // Remove |key| from index and free its slot in the owning segment.
-  Status Delete(uint64_t key);
+  Status Delete(const KeyT& key);
 
   // Low-level lookup of the encoded offset. Returns kNotFound if absent.
-  Status Lookup(uint64_t key, uint64_t* encoded_offset) const;
+  Status Lookup(const KeyT& key, uint64_t* encoded_offset) const;
+
+  // ---- Type-erased data path ----------------------------------------------
+  //
+  // These overloads are meant for RPC handlers and other dynamic dispatch
+  // sites that do not know |KeyT| at compile time.  |key_size| must equal
+  // sizeof(KeyT); a mismatch yields kInvalidArgument.
+  //
+  // The |key_input| buffer is memcpy'd into a KeyT value, so callers do not
+  // need to retain the buffer after the call returns.
+
+  Status PutRaw(const void* key_input, size_t key_size, const void* value,
+                size_t value_size);
+
+  Status GetRaw(const void* key_input, size_t key_size, void* value_out,
+                size_t value_size);
+
+  Status DeleteRaw(const void* key_input, size_t key_size);
+
+  Status LookupRaw(const void* key_input, size_t key_size,
+                   uint64_t* encoded_offset) const;
 
   // ---- Persistence --------------------------------------------------------
 
@@ -130,41 +169,41 @@ class Index {
 
   // Update the encoded offset for |key| from |old_off| to |new_off| iff the
   // current mapping equals |old_off|.  Used by compaction.
-  Status RemapIfEquals(uint64_t key, uint64_t old_off, uint64_t new_off);
+  Status RemapIfEquals(const KeyT& key, uint64_t old_off, uint64_t new_off);
 
   // ---- Stats --------------------------------------------------------------
 
   size_t Size() const;
   uint64_t WalBytes() const;
 
+  // Size in bytes of the user key, exposed so that raw-API callers can size
+  // their buffers correctly.
+  static constexpr size_t key_size() { return sizeof(KeyT); }
+
  private:
   // 16 submaps (N=4) -> 2^4 partitions, each with its own std::mutex.
-  // Using parallel_flat_hash_map_m which defaults to std::mutex for internal
-  // per-submap locking, enabling safe concurrent Put/Get/Delete without an
-  // external lock.
   static constexpr size_t kSubmapLog2 = 4;
   using Map = phmap::parallel_flat_hash_map_m<
-      uint64_t, uint64_t, phmap::priv::hash_default_hash<uint64_t>,
-      phmap::priv::hash_default_eq<uint64_t>,
-      phmap::priv::Allocator<phmap::priv::Pair<const uint64_t, uint64_t>>,
+      KeyT, uint64_t, Hash, Eq,
+      phmap::priv::Allocator<phmap::priv::Pair<const KeyT, uint64_t>>,
       kSubmapLog2>;
 
-  // Internal: free the slot that |encoded| points to.  Only SegmentSlot
-  // entries are reclaimable; other flag types are no-ops here.
+  // Free the slot that |encoded| points to.  Only SegmentSlot entries are
+  // reclaimable; other flag types are no-ops here.
   Status FreeSlot(uint64_t encoded);
 
-  // Internal: write value into an active segment, return encoded offset.
-  Status WriteToSegment(uint64_t key, const void* value, uint64_t* encoded);
+  // Write |value| into an active segment and return the encoded offset.
+  Status WriteToSegment(const KeyT& key, const void* value, uint64_t* encoded);
 
-  // Internal: read the key stored at |encoded| (SegmentSlot only).
-  Status ReadKeyAtEncoded(uint64_t encoded, uint64_t* key_out);
+  // Read the key stored at the slot identified by |encoded| (SegmentSlot only).
+  Status ReadKeyAtEncoded(uint64_t encoded, KeyT* key_out);
 
   // WAL append helper; no-op when WAL is disabled.
-  Status AppendWal(WalRecordType t, uint64_t key, uint64_t disk_addr,
+  Status AppendWal(WalRecordType type, const KeyT& key, uint64_t disk_addr,
                    uint64_t old_disk_addr);
 
   // Apply a replayed record to the map (used during Open()).
-  void ApplyRecord(const WalRecord& rec);
+  void ApplyRecord(const WalRecord<KeyT>& rec);
 
   // Rotate the WAL after a successful snapshot.
   Status RotateWal();
@@ -179,6 +218,10 @@ class Index {
   std::mutex checkpoint_mutex_;
   std::atomic<bool> opened_;
 };
+
+// Convenient type aliases for the two supported key widths.
+using Index64 = Index<Key64>;
+using Index128 = Index<Key128, Key128Hash, Key128Eq>;
 
 }  // namespace index
 }  // namespace parakv

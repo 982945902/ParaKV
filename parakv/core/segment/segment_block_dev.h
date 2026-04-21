@@ -51,7 +51,8 @@ class SegmentBlockDev : public SegmentBase {
 
   Status Read(uint32_t slot_id, void* key, void* value) override;
   Status Delete(uint32_t slot_id) override;
-  Status Compact(SegmentBase* target) override;
+  Status Compact(SegmentBase* target,
+                 const SlotMoveCallback& on_slot_moved) override;
   Status SyncBitmap() override;
 
  private:

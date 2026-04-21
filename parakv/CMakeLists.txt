@@ -46,6 +46,9 @@ SRCS
     parakv.cc
 DEPS
     glog::glog
+    common
+    index
+    segment
 )
 
 # link brpc

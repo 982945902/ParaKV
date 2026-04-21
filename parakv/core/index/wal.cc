@@ -22,20 +22,13 @@ limitations under the License.
 #include <array>
 #include <cerrno>
 #include <cstring>
+#include <memory>
 #include <utility>
 
 namespace parakv {
 namespace index {
 
-using segment::Status;
-
 namespace {
-
-// Bytes [0, kCrcPayloadLen) of a record are covered by CRC32. The CRC value
-// itself sits at byte offset kCrcOffset (== 26); bytes [30, 32) are zero
-// padding for 32-byte alignment.
-constexpr size_t kCrcOffset = 26;
-constexpr size_t kCrcPayloadLen = 26;
 
 // Pre-computed lookup table for the reflected IEEE 802.3 CRC32 polynomial
 // (0xEDB88320). Wrapping the table in a function-local const static leverages
@@ -93,7 +86,7 @@ uint32_t ReadLE32(const uint8_t* p) {
 Status PWriteAll(int fd, const void* buf, size_t count, uint64_t offset) {
   const auto* p = static_cast<const char*>(buf);
   while (count > 0) {
-    ssize_t n = ::pwrite(fd, p, count, offset);
+    const ssize_t n = ::pwrite(fd, p, count, offset);
     if (n < 0) {
       if (errno == EINTR) {
         continue;
@@ -109,13 +102,13 @@ Status PWriteAll(int fd, const void* buf, size_t count, uint64_t offset) {
 
 // Read exactly |count| bytes into |buf| from the current file cursor.
 // Sets |*eof| to true and returns kOk if EOF is reached before any data is
-// read; partial reads past EOF return kIOError to flag corruption.
+// read; partial reads past EOF return kCorruption to flag a torn record.
 Status ReadAll(int fd, void* buf, size_t count, bool* eof) {
   auto* p = static_cast<char*>(buf);
   *eof = false;
   size_t total_read = 0;
   while (count > 0) {
-    ssize_t n = ::read(fd, p, count);
+    const ssize_t n = ::read(fd, p, count);
     if (n < 0) {
       if (errno == EINTR) {
         continue;
@@ -127,7 +120,6 @@ Status ReadAll(int fd, void* buf, size_t count, bool* eof) {
         *eof = true;
         return Status::kOk;
       }
-      // Partial record at EOF; caller treats this as corruption and stops.
       return Status::kCorruption;
     }
     p += n;
@@ -147,20 +139,24 @@ uint32_t Crc32(const uint8_t* data, size_t len) {
   return crc ^ 0xFFFFFFFFu;
 }
 
-void WalRecord::Encode(uint8_t out[kEncodedSize]) const {
+// ---------------------------- WalRecord<KeyT> -------------------------------
+
+template <typename KeyT>
+void WalRecord<KeyT>::Encode(uint8_t* out) const {
   std::memset(out, 0, kEncodedSize);
   out[0] = kMagic;
   out[1] = static_cast<uint8_t>(type);
-  WriteLE64(out + 2, key);
-  WriteLE64(out + 10, disk_addr);
-  WriteLE64(out + 18, old_disk_addr);
+  std::memcpy(out + 2, &key, kKeySize);
+  WriteLE64(out + 2 + kKeySize, disk_addr);
+  WriteLE64(out + 10 + kKeySize, old_disk_addr);
 
   const uint32_t crc = Crc32(out, kCrcPayloadLen);
   WriteLE32(out + kCrcOffset, crc);
-  // bytes [30, 32) remain zero padding for alignment.
+  // Remaining bytes [kRawSize, kEncodedSize) stay zero-padded for alignment.
 }
 
-bool WalRecord::Decode(const uint8_t in[kEncodedSize], WalRecord* out) {
+template <typename KeyT>
+bool WalRecord<KeyT>::Decode(const uint8_t* in, WalRecord<KeyT>* out) {
   if (in[0] != kMagic) {
     return false;
   }
@@ -171,13 +167,18 @@ bool WalRecord::Decode(const uint8_t in[kEncodedSize], WalRecord* out) {
   }
 
   out->type = static_cast<WalRecordType>(in[1]);
-  out->key = ReadLE64(in + 2);
-  out->disk_addr = ReadLE64(in + 10);
-  out->old_disk_addr = ReadLE64(in + 18);
+  std::memcpy(&out->key, in + 2, kKeySize);
+  out->disk_addr = ReadLE64(in + 2 + kKeySize);
+  out->old_disk_addr = ReadLE64(in + 10 + kKeySize);
   return true;
 }
 
-// -------------------------- WalWriter ---------------------------------------
+// Explicit instantiation for the key types supported by this reference
+// implementation.  Adding a new key width is a one-line addition below.
+template struct WalRecord<Key64>;
+template struct WalRecord<Key128>;
+
+// ------------------------------- WalWriter ---------------------------------
 
 WalWriter::WalWriter() : fd_(-1), bytes_written_(0) {}
 
@@ -214,29 +215,30 @@ Status WalWriter::Close() {
   if (fd_ < 0) {
     return Status::kOk;
   }
-  ::fsync(fd_);
-  ::close(fd_);
+  (void)::fsync(fd_);
+  (void)::close(fd_);
   fd_ = -1;
   return Status::kOk;
 }
 
-Status WalWriter::WriteLocked(const WalRecord& rec) {
+Status WalWriter::WriteLocked(const uint8_t* buf, size_t n) {
   if (fd_ < 0) {
     return Status::kIOError;
   }
-  uint8_t buf[WalRecord::kEncodedSize];
-  rec.Encode(buf);
-  const auto s = PWriteAll(fd_, buf, WalRecord::kEncodedSize, bytes_written_);
+  const Status s = PWriteAll(fd_, buf, n, bytes_written_);
   if (s != Status::kOk) {
     return s;
   }
-  bytes_written_ += WalRecord::kEncodedSize;
+  bytes_written_ += n;
   return Status::kOk;
 }
 
-Status WalWriter::Append(const WalRecord& rec) {
+Status WalWriter::Append(const uint8_t* buf, size_t n) {
+  if (buf == nullptr || n == 0) {
+    return Status::kInvalidArgument;
+  }
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto s = WriteLocked(rec);
+  const Status s = WriteLocked(buf, n);
   if (s != Status::kOk) {
     return s;
   }
@@ -246,13 +248,14 @@ Status WalWriter::Append(const WalRecord& rec) {
   return Status::kOk;
 }
 
-Status WalWriter::AppendBatch(const WalRecord* recs, size_t count) {
-  if (recs == nullptr || count == 0) {
+Status WalWriter::AppendBatch(const uint8_t* buf, size_t record_size,
+                              size_t count) {
+  if (buf == nullptr || record_size == 0 || count == 0) {
     return Status::kInvalidArgument;
   }
   std::lock_guard<std::mutex> lock(mutex_);
   for (size_t i = 0; i < count; ++i) {
-    const auto s = WriteLocked(recs[i]);
+    const Status s = WriteLocked(buf + i * record_size, record_size);
     if (s != Status::kOk) {
       return s;
     }
@@ -263,7 +266,7 @@ Status WalWriter::AppendBatch(const WalRecord* recs, size_t count) {
   return Status::kOk;
 }
 
-// -------------------------- WalReader ---------------------------------------
+// ------------------------------- WalReader ---------------------------------
 
 WalReader::WalReader() : fd_(-1), last_good_offset_(0) {}
 
@@ -291,20 +294,25 @@ Status WalReader::Close() {
   if (fd_ < 0) {
     return Status::kOk;
   }
-  ::close(fd_);
+  (void)::close(fd_);
   fd_ = -1;
   return Status::kOk;
 }
 
-Status WalReader::Replay(const std::function<void(const WalRecord&)>& fn) {
+Status WalReader::Replay(size_t record_size,
+                         const std::function<bool(const uint8_t*)>& fn) {
   if (fd_ < 0) {
     return Status::kIOError;
   }
+  if (record_size == 0) {
+    return Status::kInvalidArgument;
+  }
 
-  uint8_t buf[WalRecord::kEncodedSize];
+  // Heap buffer so we can handle arbitrary (template-driven) record sizes.
+  std::unique_ptr<uint8_t[]> buf(new uint8_t[record_size]);
   while (true) {
     bool eof = false;
-    const auto s = ReadAll(fd_, buf, WalRecord::kEncodedSize, &eof);
+    const Status s = ReadAll(fd_, buf.get(), record_size, &eof);
     if (s == Status::kCorruption) {
       // Partial tail record (torn write after a crash). Stop cleanly so the
       // caller can truncate the log at last_good_offset_.
@@ -317,15 +325,11 @@ Status WalReader::Replay(const std::function<void(const WalRecord&)>& fn) {
       break;
     }
 
-    WalRecord rec;
-    if (!WalRecord::Decode(buf, &rec)) {
-      // Magic/CRC mismatch -- same torn-write semantics as above.
+    if (fn && !fn(buf.get())) {
+      // Decoder rejected the record (magic / CRC mismatch) -- torn write.
       break;
     }
-    if (fn) {
-      fn(rec);
-    }
-    last_good_offset_ += WalRecord::kEncodedSize;
+    last_good_offset_ += record_size;
   }
   return Status::kOk;
 }

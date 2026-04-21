@@ -15,15 +15,16 @@ limitations under the License.
 
 #pragma once
 
-#include <gflags/gflags.h>
+#include <glog/logging.h>
 
-DECLARE_uint32(segment_size);
-DECLARE_uint32(segment_count);
-DECLARE_uint32(segment_key_size);
-DECLARE_uint32(segment_value_size);
-DECLARE_uint32(segment_bitmap_alignment);
-DECLARE_double(segment_compaction_threshold);
-DECLARE_uint32(segment_hot_threshold);
-DECLARE_uint32(segment_max_hot_count);
-DECLARE_uint32(segment_flush_interval_ms);
-DECLARE_string(segement_workspace_path);
+#include "common/status.h"
+
+namespace parakv {
+namespace llm_kvcache {
+
+KvacheStorage::KvacheStorage() { LOG(INFO) << "KvacheStorage constructor"; }
+
+KvacheStorage::~KvacheStorage() { LOG(INFO) << "KvacheStorage destructor"; }
+
+}  // namespace llm_kvcache
+}  // namespace parakv

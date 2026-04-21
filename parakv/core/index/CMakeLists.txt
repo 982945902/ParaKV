@@ -5,6 +5,7 @@ cc_library(
     NAME
         index
     HDRS
+        key.h
         offset.h
         wal.h
         index.h

@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "global_gflags.h"
 
+// Segment related flags
 DEFINE_uint32(segment_size, 256 * 1024 * 1024, "segment size in bytes");
 DEFINE_uint32(segment_count, 1024, "total number of segments");
 DEFINE_uint32(segment_key_size, 8, "fixed key size in bytes");
@@ -28,3 +29,5 @@ DEFINE_uint32(segment_max_hot_count, 64,
               "maximum number of hot segments in memory");
 DEFINE_uint32(segment_flush_interval_ms, 1000,
               "hot segment async flush interval in milliseconds");
+DEFINE_string(segement_workspace_path, "./segment_workspace",
+              "segment workspace path");

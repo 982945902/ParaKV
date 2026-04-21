@@ -244,7 +244,8 @@ Status SegmentBlockDev::Delete(uint32_t slot_id) {
   return Status::kOk;
 }
 
-Status SegmentBlockDev::Compact(SegmentBase* target) {
+Status SegmentBlockDev::Compact(SegmentBase* target,
+                                const SlotMoveCallback& on_slot_moved) {
   if (target == nullptr) {
     return Status::kInvalidArgument;
   }
@@ -278,6 +279,10 @@ Status SegmentBlockDev::Compact(SegmentBase* target) {
     s = target->Insert(key_buf.data(), val_buf.data(), &new_slot_id);
     if (s != Status::kOk) {
       return s;
+    }
+    if (on_slot_moved) {
+      on_slot_moved(key_buf.data(), segment_id_, i, target->GetSegmentId(),
+                    new_slot_id);
     }
   }
 

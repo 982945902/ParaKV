@@ -10,3 +10,6 @@
 [submodule "third_party/parallel-hashmap"]
 	path = third_party/parallel-hashmap
 	url = https://gitcode.com/xLLM-AI/parallel-hashmap.git
+[submodule "third_party/etcd-cpp-apiv3"]
+	path = third_party/etcd-cpp-apiv3
+	url = https://gitcode.com/xLLM-AI/etcd-cpp-apiv3.git

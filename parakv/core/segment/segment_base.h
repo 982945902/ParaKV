@@ -16,22 +16,15 @@ limitations under the License.
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
 
+#include "common/status.h"
+
 namespace parakv {
 namespace segment {
-
-enum class Status {
-  kOk = 0,
-  kNotFound,
-  kFull,
-  kIOError,
-  kInvalidArgument,
-  kCorruption,
-  kNoSpace,
-};
 
 enum class SegmentState {
   IDLE = 0,
@@ -40,12 +33,17 @@ enum class SegmentState {
 };
 
 struct SegmentConfig {
+  bool is_need_compaction = true;
   uint32_t key_size = 8;
   uint32_t value_size = 512;
   uint64_t segment_size = 256ULL * 1024 * 1024;
   double compaction_threshold = 0.75;
   uint64_t bitmap_alignment = 4096;
 };
+
+using SlotMoveCallback =
+    std::function<void(void* key, uint32_t old_segment_id, uint32_t old_slot_id,
+                       uint32_t new_segment_id, uint32_t new_slot_id)>;
 
 class SegmentBase {
  public:
@@ -68,7 +66,8 @@ class SegmentBase {
 
   virtual Status Delete(uint32_t slot_id) = 0;
 
-  virtual Status Compact(SegmentBase* target) = 0;
+  virtual Status Compact(SegmentBase* target,
+                         const SlotMoveCallback& on_slot_moved) = 0;
 
   virtual Status SyncBitmap() = 0;
 
