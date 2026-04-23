@@ -1,0 +1,183 @@
+// Copyright 2026 The ParaKV Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://gitcode.com/xLLM-AI/ParaKV/blob/main/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// =============================================================================
+//
+// Service interface for ParaKV acting as the persistent KVCache backend of an
+// LLM inference engine. The engine chunks the prefill KVCache (per-layer,
+// per-block) into fixed-size value blobs keyed by a collision-resistant hash
+// of the prefix token sequence (typically xxh3_128), and offloads them to
+// ParaKV via batched RPCs.
+//
+// All RPCs are batch-oriented by design: a single request packs many K/V
+// items to amortize RPC / network overhead and to align with the way the
+// engine schedules block-level offload/onload.
+
+syntax = "proto3";
+
+package parakv.proto;
+
+option cc_enable_arenas = true;
+// Required by brpc: brpc services are built on top of the standard
+// google::protobuf::Service abstraction, which is gated behind this option
+// in protobuf 3.x.
+option cc_generic_services = true;
+
+// -----------------------------------------------------------------------------
+// Common types
+// -----------------------------------------------------------------------------
+
+// Unified status code shared by request-level and item-level results.
+// Values are stable across versions; do not renumber.
+enum StatusCode {
+  OK                 = 0;
+  // Generic / unspecified failure.
+  UNKNOWN            = 1;
+  // Request was malformed (empty batch, oversized item, bad key length, ...).
+  INVALID_ARGUMENT   = 2;
+  // Key does not exist (BatchRead / BatchExists / BatchDelete).
+  NOT_FOUND          = 3;
+  // Key already exists and overwrite == false (BatchWrite).
+  ALREADY_EXISTS     = 4;
+  // Value size exceeds the configured slot/value capacity.
+  VALUE_TOO_LARGE    = 5;
+  // Backend storage is full and compaction could not reclaim space.
+  STORAGE_FULL       = 6;
+  // Underlying I/O error (block device, file, remote replica, ...).
+  IO_ERROR           = 7;
+  // Server is temporarily unavailable (starting up, under compaction, ...).
+  UNAVAILABLE        = 8;
+  // Deadline exceeded while processing the item/request.
+  DEADLINE_EXCEEDED  = 9;
+  // Caller is not permitted to access this namespace / key range.
+  PERMISSION_DENIED  = 10;
+  // Value found but checksum / version mismatch.
+  DATA_CORRUPTED     = 11;
+}
+
+// A single key/value pair used by batch write.
+//
+// `key`   - opaque bytes. Typical layout is a 16-byte xxh3_128 digest of the
+//           prefix token sequence, optionally prefixed with a layer/block id.
+// `value` - opaque bytes holding a serialized KVCache block (K and V tensors
+//           of one attention layer for one block of tokens).
+message KVItem {
+  bytes  key         = 1;
+  bytes  value       = 2;
+  // Optional per-item TTL in milliseconds. 0 means "use server default".
+  uint64 ttl_ms      = 3;
+  // Optional user metadata propagated back on read (e.g. dtype, shape hash,
+  // layer id). Kept small — this is not a place to store the tensor itself.
+  bytes  metadata    = 4;
+}
+
+// Per-item write result. Aligned with BatchWriteRequest.items by `key`.
+message BatchWriteResult {
+  bytes      key     = 1;
+  StatusCode code    = 2;
+  string     message = 3;
+}
+
+// Per-item read result. Aligned with BatchReadRequest.keys by `key`.
+message BatchReadResult {
+  bytes      key           = 1;
+  bytes      value         = 2;
+  bytes      metadata      = 3;
+  StatusCode code          = 4;
+  string     message       = 5;
+  // Server-side wall clock (ms since epoch) at which this entry will expire.
+  // 0 means "no expiration".
+  uint64     expiration_ms = 6;
+}
+
+// -----------------------------------------------------------------------------
+// BatchWrite
+// -----------------------------------------------------------------------------
+
+message BatchWriteRequest {
+  // Request identifier propagated into server logs / traces. Optional.
+  string   request_id = 1;
+  // Logical namespace / tenant isolation (e.g. model name + revision).
+  string   namespace  = 2;
+
+  // Items to be written atomically from the caller's point of view. The
+  // server may still report per-item failures; the batch is NOT transactional.
+  repeated KVItem items = 3;
+
+  // If true, existing entries with the same key are overwritten; otherwise
+  // such items fail with ALREADY_EXISTS.
+  bool     overwrite  = 4;
+
+  // If true, the server guarantees the data is durable (fsync'd) before
+  // replying. If false, the server may ack once the write is accepted into
+  // the in-memory write path.
+  bool     durable    = 5;
+}
+
+message BatchWriteResponse {
+  // Overall request status. OK does NOT imply every item succeeded — callers
+  // must still inspect `results` for per-item codes.
+  StatusCode code          = 1;
+  string     message       = 2;
+
+  // Per-item results, order-aligned with BatchWriteRequest.items.
+  repeated BatchWriteResult results = 3;
+
+  uint32     success_count = 4;
+  uint32     failure_count = 5;
+}
+
+// -----------------------------------------------------------------------------
+// BatchRead
+// -----------------------------------------------------------------------------
+
+message BatchReadRequest {
+  string   request_id    = 1;
+  string   namespace     = 2;
+
+  // Keys to read. Duplicates are allowed; each occurrence produces its own
+  // entry in the response.
+  repeated bytes keys    = 3;
+
+  // If false, the server returns only existence + metadata and leaves
+  // BatchReadResult.value empty. Useful as a cache-probe before offload.
+  bool     include_value = 4;
+
+  // If true, refresh each hit entry's TTL as if it were just written.
+  // No-op for missing entries.
+  bool     touch_on_hit  = 5;
+}
+
+message BatchReadResponse {
+  StatusCode code    = 1;
+  string     message = 2;
+
+  // Per-key results, order-aligned with BatchReadRequest.keys. Missing keys
+  // are reported with code == NOT_FOUND (not omitted).
+  repeated BatchReadResult results = 3;
+
+  uint32     hit_count  = 4;
+  uint32     miss_count = 5;
+}
+
+// -----------------------------------------------------------------------------
+// Service
+// -----------------------------------------------------------------------------
+
+service KVCacheStorageService {
+  // Batch write a set of KVCache blocks.
+  rpc BatchWrite(BatchWriteRequest) returns (BatchWriteResponse);
+
+  // Batch read a set of KVCache blocks by key.
+  rpc BatchRead(BatchReadRequest)   returns (BatchReadResponse);
+}

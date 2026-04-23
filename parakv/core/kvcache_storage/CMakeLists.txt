@@ -3,11 +3,12 @@ include(cc_test)
 
 cc_library(
     NAME
-        kvcache_storage
+        kvcache_storage_backend
     HDRS
-        kvcache_storage.h
+        kvcache_storage_backend.h
+        mocked_inmemory_kvcache_storage.h
     SRCS
-        kvcache_storage.cc
+        mocked_inmemory_kvcache_storage.cc
     DEPS
         glog::glog
 )
