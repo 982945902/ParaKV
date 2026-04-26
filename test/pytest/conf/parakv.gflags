@@ -1,0 +1,4 @@
+-log_dir=./logs
+-logbufsecs=0
+-logtostderr=true
+-v=1

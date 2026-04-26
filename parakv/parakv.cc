@@ -18,8 +18,10 @@ limitations under the License.
 #include <glog/logging.h>
 
 #include <memory>
+#include <sstream>
+#include <string>
 
-#include "core/kvcache_storage/mocked_inmemory_kvcache_storage.h"
+#include "core/kvcache_storage/backend_registry.h"
 #include "service/kvcache_storage_service_impl.h"
 
 DEFINE_int32(port, 8200, "brpc listen port");
@@ -28,12 +30,64 @@ DEFINE_int32(idle_timeout_s, 60,
 DEFINE_int32(max_batch_size, 1024, "Max items per batch");
 DEFINE_uint64(max_value_bytes, 0, "Per-item value size limit; 0 = no limit");
 
+DEFINE_string(backend, "memory",
+              "KVCache storage backend name (see RegisteredNames())");
+DEFINE_string(backend_opts, "",
+              "Comma-separated key=value list passed to the backend factory, "
+              "e.g. --backend_opts=max_value_bytes=1048576,default_ttl_ms=0");
+
+namespace {
+
+// Parse "k1=v1,k2=v2" into BackendConfig. Whitespace around keys / values is
+// trimmed; empty segments and segments without '=' are skipped with a warning.
+parakv::kvcache_storage::BackendConfig ParseBackendOpts(const std::string& s) {
+  parakv::kvcache_storage::BackendConfig cfg;
+  std::stringstream ss(s);
+  std::string segment;
+  while (std::getline(ss, segment, ',')) {
+    const auto first = segment.find_first_not_of(" \t");
+    const auto last = segment.find_last_not_of(" \t");
+    if (first == std::string::npos) continue;
+    segment = segment.substr(first, last - first + 1);
+
+    const auto eq = segment.find('=');
+    if (eq == std::string::npos || eq == 0) {
+      LOG(WARNING) << "Ignoring malformed --backend_opts segment: " << segment;
+      continue;
+    }
+    cfg.Set(segment.substr(0, eq), segment.substr(eq + 1));
+  }
+  return cfg;
+}
+
+std::string JoinRegisteredNames() {
+  const auto names =
+      parakv::kvcache_storage::BackendRegistry::Instance().RegisteredNames();
+  std::string joined;
+  for (const auto& n : names) {
+    if (!joined.empty()) joined.append(", ");
+    joined.append(n);
+  }
+  return joined;
+}
+
+}  // namespace
+
 int main(int argc, char* argv[]) {
   google::ParseCommandLineFlags(&argc, &argv, true);
   google::InitGoogleLogging(argv[0]);
 
-  auto backend =
-      std::make_shared<parakv::kvcache_storage::MockedInMemoryKVCacheStorage>();
+  parakv::kvcache_storage::RegisterBuiltinBackends();
+
+  auto cfg = ParseBackendOpts(FLAGS_backend_opts);
+  auto backend = parakv::kvcache_storage::BackendRegistry::Instance().Create(
+      FLAGS_backend, cfg);
+  if (!backend) {
+    LOG(ERROR) << "Failed to create backend '" << FLAGS_backend
+               << "'. Available backends: [" << JoinRegisteredNames() << "]";
+    return -1;
+  }
+  LOG(INFO) << "KVCache backend: " << FLAGS_backend;
 
   parakv::service::ServiceOptions svc_opts;
   svc_opts.max_batch_size = static_cast<uint32_t>(FLAGS_max_batch_size);
