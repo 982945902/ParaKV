@@ -77,7 +77,7 @@ int main(int argc, char* argv[]) {
   google::ParseCommandLineFlags(&argc, &argv, true);
   google::InitGoogleLogging(argv[0]);
 
-  parakv::kvcache_storage::RegisterBuiltinBackends();
+  // parakv::kvcache_storage::RegisterBuiltinBackends();
 
   auto cfg = ParseBackendOpts(FLAGS_backend_opts);
   auto backend = parakv::kvcache_storage::BackendRegistry::Instance().Create(

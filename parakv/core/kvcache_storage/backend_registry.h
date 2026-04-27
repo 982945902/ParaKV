@@ -88,15 +88,6 @@ class BackendRegistry {
   std::unordered_map<std::string, BackendFactory> factories_;
 };
 
-// Register every backend shipped inside libkvcache_storage_backend.a.
-//
-// Self-registration via PARAKV_REGISTER_KVCACHE_BACKEND works when the
-// defining translation unit is pulled in by the linker, but with static
-// libraries an unreferenced TU is typically discarded. Call this once from
-// `main()` (or a test fixture) to guarantee built-in backends are available
-// regardless of link order.
-void RegisterBuiltinBackends();
-
 }  // namespace kvcache_storage
 }  // namespace parakv
 
@@ -113,10 +104,10 @@ void RegisterBuiltinBackends();
 //       });
 //
 // The macro creates a file-scope object whose constructor performs the
-// registration at static-init time. See note on RegisterBuiltinBackends()
-// for the static-library caveat.
+// registration at static-init time , but with static libraries an
+// unreferenced TU is typically discarded, so all backends should be
+// registered in backend_registry.cc.
 // ---------------------------------------------------------------------------
-
 #define PARAKV_KV_BACKEND_CONCAT_IMPL(x, y) x##y
 #define PARAKV_KV_BACKEND_CONCAT(x, y) PARAKV_KV_BACKEND_CONCAT_IMPL(x, y)
 

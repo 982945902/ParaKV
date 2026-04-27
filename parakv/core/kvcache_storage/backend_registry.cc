@@ -23,6 +23,7 @@ limitations under the License.
 #include <cstring>
 #include <utility>
 
+#include "index_kvcache_storage_backend.h"
 #include "mocked_inmemory_kvcache_storage.h"
 
 namespace parakv {
@@ -47,7 +48,10 @@ const std::string& BackendConfig::Get(const std::string& key,
 int64_t BackendConfig::GetInt(const std::string& key,
                               int64_t default_value) const {
   auto it = entries_.find(key);
-  if (it == entries_.end() || it->second.empty()) return default_value;
+  if (it == entries_.end() || it->second.empty()) {
+    return default_value;
+  }
+
   errno = 0;
   char* end = nullptr;
   const long long v = std::strtoll(it->second.c_str(), &end, 10);
@@ -56,13 +60,17 @@ int64_t BackendConfig::GetInt(const std::string& key,
                  << " value=" << it->second << ", using default";
     return default_value;
   }
+
   return static_cast<int64_t>(v);
 }
 
 uint64_t BackendConfig::GetUint(const std::string& key,
                                 uint64_t default_value) const {
   auto it = entries_.find(key);
-  if (it == entries_.end() || it->second.empty()) return default_value;
+  if (it == entries_.end() || it->second.empty()) {
+    return default_value;
+  }
+
   errno = 0;
   char* end = nullptr;
   const unsigned long long v = std::strtoull(it->second.c_str(), &end, 10);
@@ -71,29 +79,44 @@ uint64_t BackendConfig::GetUint(const std::string& key,
                  << " value=" << it->second << ", using default";
     return default_value;
   }
+
   return static_cast<uint64_t>(v);
 }
 
 bool BackendConfig::GetBool(const std::string& key, bool default_value) const {
   auto it = entries_.find(key);
-  if (it == entries_.end()) return default_value;
+  if (it == entries_.end()) {
+    return default_value;
+  }
+
   std::string v = it->second;
   std::transform(v.begin(), v.end(), v.begin(),
                  [](unsigned char c) { return std::tolower(c); });
-  if (v == "1" || v == "true" || v == "yes" || v == "on") return true;
-  if (v == "0" || v == "false" || v == "no" || v == "off" || v.empty())
+
+  if (v == "1" || v == "true" || v == "yes" || v == "on") {
+    return true;
+  }
+
+  if (v == "0" || v == "false" || v == "no" || v == "off" || v.empty()) {
     return false;
+  }
+
   LOG(WARNING) << "BackendConfig: cannot parse bool for key=" << key
                << " value=" << it->second << ", using default";
+
   return default_value;
 }
 
 BackendRegistry& BackendRegistry::Instance() {
   static BackendRegistry instance;
+
   return instance;
 }
 
 bool BackendRegistry::Register(std::string name, BackendFactory factory) {
+  LOG(INFO) << "BackendRegistry::Register: registering backend '" << name
+            << "'";
+
   if (name.empty()) {
     LOG(ERROR) << "BackendRegistry::Register rejected: empty name";
     return false;
@@ -103,6 +126,7 @@ bool BackendRegistry::Register(std::string name, BackendFactory factory) {
                << name;
     return false;
   }
+
   std::lock_guard<std::mutex> lock(mu_);
   auto [it, inserted] = factories_.emplace(std::move(name), std::move(factory));
   if (!inserted) {
@@ -110,6 +134,7 @@ bool BackendRegistry::Register(std::string name, BackendFactory factory) {
                  << "' already registered; keeping the existing entry";
     return false;
   }
+
   VLOG(1) << "BackendRegistry: registered backend '" << it->first << "'";
   return true;
 }
@@ -126,16 +151,19 @@ std::shared_ptr<KVCacheStorageBackend> BackendRegistry::Create(
     }
     factory = it->second;
   }
+
   auto backend = factory(config);
   if (!backend) {
     LOG(ERROR) << "BackendRegistry::Create: factory for '" << name
                << "' returned nullptr";
   }
+
   return backend;
 }
 
 bool BackendRegistry::IsRegistered(const std::string& name) const {
   std::lock_guard<std::mutex> lock(mu_);
+
   return factories_.find(name) != factories_.end();
 }
 
@@ -143,29 +171,44 @@ std::vector<std::string> BackendRegistry::RegisteredNames() const {
   std::lock_guard<std::mutex> lock(mu_);
   std::vector<std::string> names;
   names.reserve(factories_.size());
-  for (const auto& kv : factories_) names.push_back(kv.first);
+  for (const auto& kv : factories_) {
+    names.push_back(kv.first);
+  }
   std::sort(names.begin(), names.end());
+
   return names;
-}
-
-void RegisterBuiltinBackends() {
-  static std::once_flag once;
-  std::call_once(once, [] {
-    auto& registry = BackendRegistry::Instance();
-
-    registry.Register(
-        "memory",
-        [](const BackendConfig& cfg) -> std::shared_ptr<KVCacheStorageBackend> {
-          MockedInMemoryKVCacheStorage::Options opts;
-          opts.max_value_bytes = cfg.GetUint("max_value_bytes", 0);
-          opts.default_ttl_ms = cfg.GetUint("default_ttl_ms", 0);
-          return std::make_shared<MockedInMemoryKVCacheStorage>(opts);
-        });
-
-    // Additional built-in backends (segment-file / block-device / remote /
-    // ... ) should be registered here as they land.
-  });
 }
 
 }  // namespace kvcache_storage
 }  // namespace parakv
+
+PARAKV_REGISTER_KVCACHE_BACKEND(
+    "memory",
+    [](const ::parakv::kvcache_storage::BackendConfig& cfg)
+        -> std::shared_ptr<::parakv::kvcache_storage::KVCacheStorageBackend> {
+      ::parakv::kvcache_storage::MockedInMemoryKVCacheStorage::Options opts;
+      opts.max_value_bytes = cfg.GetUint("max_value_bytes", 0);
+      opts.default_ttl_ms = cfg.GetUint("default_ttl_ms", 0);
+
+      return std::make_shared<
+          ::parakv::kvcache_storage::MockedInMemoryKVCacheStorage>(opts);
+    });
+
+PARAKV_REGISTER_KVCACHE_BACKEND(
+    "index128",
+    [](const ::parakv::kvcache_storage::BackendConfig& cfg)
+        -> std::shared_ptr<::parakv::kvcache_storage::KVCacheStorageBackend> {
+      ::parakv::kvcache_storage::IndexKVCacheStorageBackend::Options opts;
+      opts.root_dir = cfg.Get("root_dir", "/tmp/parakv-index128-backend");
+      opts.segment_size = cfg.GetUint("segment_size", 64ULL * 1024 * 1024);
+      opts.slot_value_size =
+          static_cast<uint32_t>(cfg.GetUint("slot_value_size", 4096));
+      opts.segment_count =
+          static_cast<uint32_t>(cfg.GetUint("segment_count", 1));
+      opts.enable_wal = cfg.GetBool("enable_wal", false);
+      opts.wal_checkpoint_bytes =
+          cfg.GetUint("wal_checkpoint_bytes", 1ULL << 30);
+
+      return std::make_shared<
+          ::parakv::kvcache_storage::IndexKVCacheStorageBackend>(opts);
+    });

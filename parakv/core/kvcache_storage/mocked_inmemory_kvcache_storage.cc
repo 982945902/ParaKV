@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "mocked_inmemory_kvcache_storage.h"
 
+#include <glog/logging.h>
+
 #include <chrono>
 #include <memory>
 #include <utility>
@@ -118,18 +120,3 @@ size_t MockedInMemoryKVCacheStorage::size() const {
 
 }  // namespace kvcache_storage
 }  // namespace parakv
-
-// Self-registration. Redundant with RegisterBuiltinBackends() on purpose:
-// the explicit bootstrap guarantees the backend is reachable even when this
-// TU is dropped by the static linker; the macro keeps the "where is this
-// name bound?" answer co-located with the implementation.
-PARAKV_REGISTER_KVCACHE_BACKEND(
-    "memory",
-    [](const ::parakv::kvcache_storage::BackendConfig& cfg)
-        -> std::shared_ptr<::parakv::kvcache_storage::KVCacheStorageBackend> {
-      ::parakv::kvcache_storage::MockedInMemoryKVCacheStorage::Options opts;
-      opts.max_value_bytes = cfg.GetUint("max_value_bytes", 0);
-      opts.default_ttl_ms = cfg.GetUint("default_ttl_ms", 0);
-      return std::make_shared<
-          ::parakv::kvcache_storage::MockedInMemoryKVCacheStorage>(opts);
-    });

@@ -8,9 +8,13 @@ cc_library(
         kvcache_storage_backend.h
         backend_registry.h
         mocked_inmemory_kvcache_storage.h
+        index_kvcache_storage_backend.h
     SRCS
         backend_registry.cc
         mocked_inmemory_kvcache_storage.cc
+        index_kvcache_storage_backend.cc
     DEPS
         glog::glog
+        :index
+        :segment
 )
