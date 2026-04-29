@@ -278,10 +278,10 @@ IndexKVCacheStorageBackend::GetOrCreateNamespace(const std::string& ns,
   idx_opts.segment_manager = mgr;
   idx_opts.segment_config = seg_cfg;
   idx_opts.wal_checkpoint_bytes = options_.wal_checkpoint_bytes;
-  if (options_.enable_wal) {
-    idx_opts.wal_path = ns_dir + "/index.wal";
-    idx_opts.snapshot_dir = ns_dir;
-  }
+  idx_opts.wal_path = ns_dir + "/index.wal";
+  idx_opts.snapshot_dir = ns_dir;
+  idx_opts.namespace_name = ns;
+
   auto idx = std::make_shared<index::Index128>(idx_opts);
   parakv::Status s = idx->Open();
   if (s != parakv::Status::kOk) {
@@ -358,6 +358,9 @@ ReadResult IndexKVCacheStorageBackend::Get(const std::string& ns,
     return {c, "key must be exactly 16 bytes (Key128)", {}, {}, 0};
   }
 
+  LOG(INFO) << "IndexKVCacheStorageBackend::Get: namespace='" << ns
+            << "', key='" << key << "'";
+
   BackendCode create_code = BackendCode::kOk;
   std::string create_msg;
   auto ctx = GetOrCreateNamespace(ns, &create_code, &create_msg);
@@ -393,23 +396,34 @@ ReadResult IndexKVCacheStorageBackend::Get(const std::string& ns,
   return r;
 }
 
+void IndexKVCacheStorageBackend::Close() {
+  // Move out the namespaces under the lock so we drop the lock before
+  // doing potentially slow disk I/O (snapshot dump), and so a second
+  // Close() call observes an empty map and becomes a no-op.
+  std::unordered_map<std::string, std::shared_ptr<NamespaceContext>> taken;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    taken.swap(namespaces_);
+  }
+
+  LOG(INFO) << "IndexKVCacheStorageBackend::Close: closing " << taken.size()
+            << " namespaces";
+
+  for (auto& kv : taken) {
+    auto& ctx = kv.second;
+    if (!ctx || !ctx->index) {
+      continue;
+    }
+    LOG(INFO) << "IndexKVCacheStorageBackend::Close: checkpointing namespace='"
+              << kv.first << "'";
+    parakv::Status s = ctx->index->Checkpoint();
+    if (s != parakv::Status::kOk) {
+      LOG(WARNING) << "Checkpoint failed for namespace='" << kv.first
+                   << "', status=" << static_cast<int>(s);
+    }
+    (void)ctx->index->Close();
+  }
+}
+
 }  // namespace kvcache_storage
 }  // namespace parakv
-
-PARAKV_REGISTER_KVCACHE_BACKEND(
-    "index128",
-    [](const ::parakv::kvcache_storage::BackendConfig& cfg)
-        -> std::shared_ptr<::parakv::kvcache_storage::KVCacheStorageBackend> {
-      ::parakv::kvcache_storage::IndexKVCacheStorageBackend::Options opts;
-      opts.root_dir = cfg.Get("root_dir", "/tmp/parakv-index128-backend");
-      opts.segment_size = cfg.GetUint("segment_size", 64ULL * 1024 * 1024);
-      opts.slot_value_size =
-          static_cast<uint32_t>(cfg.GetUint("slot_value_size", 4096));
-      opts.segment_count =
-          static_cast<uint32_t>(cfg.GetUint("segment_count", 1));
-      opts.enable_wal = cfg.GetBool("enable_wal", false);
-      opts.wal_checkpoint_bytes =
-          cfg.GetUint("wal_checkpoint_bytes", 1ULL << 30);
-      return std::make_shared<
-          ::parakv::kvcache_storage::IndexKVCacheStorageBackend>(opts);
-    });

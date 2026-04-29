@@ -17,6 +17,7 @@ limitations under the License.
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
+#include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -24,13 +25,13 @@ limitations under the License.
 #include "core/kvcache_storage/backend_registry.h"
 #include "service/kvcache_storage_service_impl.h"
 
-DEFINE_int32(port, 8200, "brpc listen port");
+DEFINE_int32(port, 9200, "brpc listen port");
 DEFINE_int32(idle_timeout_s, 60,
              "Connection idle timeout, in seconds. -1 disables the timeout.");
 DEFINE_int32(max_batch_size, 1024, "Max items per batch");
 DEFINE_uint64(max_value_bytes, 0, "Per-item value size limit; 0 = no limit");
 
-DEFINE_string(backend, "memory",
+DEFINE_string(backend, "kvcache_memory",
               "KVCache storage backend name (see RegisteredNames())");
 DEFINE_string(backend_opts, "",
               "Comma-separated key=value list passed to the backend factory, "
@@ -112,5 +113,17 @@ int main(int argc, char* argv[]) {
 
   LOG(INFO) << "KVCacheStorageService listening on :" << FLAGS_port;
   server.RunUntilAskedToQuit();
+
+  std::cout << "Press Enter to shutdown..." << std::endl;
+
+  // Graceful shutdown: brpc has stopped serving, but RPC worker bthreads or
+  // other shared_ptr holders may still keep the backend alive past the end
+  // of main(). Trigger an explicit checkpoint NOW, while glog and the file
+  // system are guaranteed to be available, instead of relying on the Index
+  // destructor which may run too late (or never, if SIGKILL is delivered).
+  LOG(INFO) << "Shutting down KVCache backend...";
+  backend->Close();
+  LOG(INFO) << "KVCache backend shutdown complete.";
+
   return 0;
 }

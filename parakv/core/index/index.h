@@ -99,6 +99,9 @@ class Index : public std::enable_shared_from_this<Index<KeyT, Hash, Eq>> {
     // Directory for checkpoint / snapshot files.  Snapshot name =
     // <dir>/index.snapshot[.tmp].  Required if wal_path is set.
     std::string snapshot_dir;
+
+    // Namespace name for the index.
+    std::string namespace_name;
   };
 
   explicit Index(Options opts);

@@ -23,6 +23,7 @@ limitations under the License.
 #include <cstring>
 #include <utility>
 
+#include "common/global_gflags.h"
 #include "index_kvcache_storage_backend.h"
 #include "mocked_inmemory_kvcache_storage.h"
 
@@ -183,7 +184,7 @@ std::vector<std::string> BackendRegistry::RegisteredNames() const {
 }  // namespace parakv
 
 PARAKV_REGISTER_KVCACHE_BACKEND(
-    "memory",
+    "kvcache_memory",
     [](const ::parakv::kvcache_storage::BackendConfig& cfg)
         -> std::shared_ptr<::parakv::kvcache_storage::KVCacheStorageBackend> {
       ::parakv::kvcache_storage::MockedInMemoryKVCacheStorage::Options opts;
@@ -195,19 +196,15 @@ PARAKV_REGISTER_KVCACHE_BACKEND(
     });
 
 PARAKV_REGISTER_KVCACHE_BACKEND(
-    "index128",
+    "kvcache_index128",
     [](const ::parakv::kvcache_storage::BackendConfig& cfg)
         -> std::shared_ptr<::parakv::kvcache_storage::KVCacheStorageBackend> {
       ::parakv::kvcache_storage::IndexKVCacheStorageBackend::Options opts;
-      opts.root_dir = cfg.Get("root_dir", "/tmp/parakv-index128-backend");
-      opts.segment_size = cfg.GetUint("segment_size", 64ULL * 1024 * 1024);
-      opts.slot_value_size =
-          static_cast<uint32_t>(cfg.GetUint("slot_value_size", 4096));
-      opts.segment_count =
-          static_cast<uint32_t>(cfg.GetUint("segment_count", 1));
-      opts.enable_wal = cfg.GetBool("enable_wal", false);
-      opts.wal_checkpoint_bytes =
-          cfg.GetUint("wal_checkpoint_bytes", 1ULL << 30);
+      opts.root_dir = FLAGS_segement_workspace_path;
+      opts.segment_size = FLAGS_segment_size;
+      opts.slot_value_size = FLAGS_segment_value_size;  //
+      opts.segment_count = FLAGS_segment_count;
+      opts.wal_checkpoint_bytes = FLAGS_index_wal_checkpoint_bytes;
 
       return std::make_shared<
           ::parakv::kvcache_storage::IndexKVCacheStorageBackend>(opts);

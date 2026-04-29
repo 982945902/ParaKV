@@ -76,6 +76,12 @@ class KVCacheStorageBackend {
   // leave `value`/`metadata` empty.
   virtual ReadResult Get(const std::string& ns, const std::string& key,
                          const ReadOptions& opts) = 0;
+
+  // Flush in-memory state to durable storage (snapshot + WAL rotation, etc.)
+  // and stop accepting further writes. Must be safe to call multiple times
+  // and from main()'s shutdown path. Default implementation is a no-op so
+  // backends without persistent state (e.g. memory-only) need not override.
+  virtual void Close() {}
 };
 
 }  // namespace kvcache_storage

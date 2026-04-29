@@ -38,7 +38,6 @@ class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
     uint64_t segment_size = 64ULL * 1024 * 1024;
     uint32_t slot_value_size = 4096;
     uint32_t segment_count = 1;
-    bool enable_wal = false;
     uint64_t wal_checkpoint_bytes = 1ULL << 30;
   };
 
@@ -51,6 +50,10 @@ class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
 
   ReadResult Get(const std::string& ns, const std::string& key,
                  const ReadOptions& opts) override;
+
+  // Iterate every namespace, dump a snapshot and close its index/WAL.
+  // Idempotent: subsequent calls are no-ops because namespaces_ is cleared.
+  void Close() override;
 
  private:
   struct NamespaceContext {

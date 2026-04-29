@@ -15,6 +15,7 @@ cc_library(
         index_kvcache_storage_backend.cc
     DEPS
         glog::glog
+        :flags
         :index
         :segment
 )

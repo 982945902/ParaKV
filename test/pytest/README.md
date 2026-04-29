@@ -40,16 +40,16 @@ bash protoc.sh
 1. Start the ParaKV server (built from the C++ tree):
 
    ```bash
-   ./build/.../parakv/parakv --port=8200 --backend=memory
+   ./build/.../parakv/parakv --port=9200 --backend=memory
    ```
 
 2. Point the tests at it and run:
 
    ```bash
-   PARAKV_HOST=127.0.0.1 PARAKV_PORT=8200 pytest -v
+   PARAKV_HOST=127.0.0.1 PARAKV_PORT=9200 pytest -v
    ```
 
-`PARAKV_HOST` and `PARAKV_PORT` default to `127.0.0.1:8200` when unset.
+`PARAKV_HOST` and `PARAKV_PORT` default to `127.0.0.1:9200` when unset.
 
 ## What's covered
 

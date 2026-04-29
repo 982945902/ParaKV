@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <gflags/gflags.h>
 
+// Segment related flags
 DECLARE_uint32(segment_size);
 DECLARE_uint32(segment_count);
 DECLARE_uint32(segment_key_size);
@@ -27,3 +28,6 @@ DECLARE_uint32(segment_hot_threshold);
 DECLARE_uint32(segment_max_hot_count);
 DECLARE_uint32(segment_flush_interval_ms);
 DECLARE_string(segement_workspace_path);
+
+// Index related flags
+DECLARE_uint32(index_wal_checkpoint_bytes);

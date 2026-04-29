@@ -2,3 +2,4 @@
 -logbufsecs=0
 -logtostderr=true
 -v=1
+-backend=kvcache_index128

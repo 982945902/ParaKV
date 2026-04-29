@@ -19,7 +19,7 @@ The tests target a running ParaKV server (the C++ brpc binary) reachable over
 gRPC. Configure the endpoint via environment variables:
 
     PARAKV_HOST  default 127.0.0.1
-    PARAKV_PORT  default 8200
+    PARAKV_PORT  default 9200
 
 The tests use unique namespaces per-test to stay isolated from each other and
 from previous runs so they can be re-executed without restarting the server.
@@ -28,6 +28,7 @@ from previous runs so they can be re-executed without restarting the server.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -48,7 +49,7 @@ import kvcache_storage_service_pb2_grpc as pb_grpc  # noqa: E402
 
 def _endpoint() -> str:
     host = os.environ.get("PARAKV_HOST", "127.0.0.1")
-    port = os.environ.get("PARAKV_PORT", "8200")
+    port = os.environ.get("PARAKV_PORT", "9200")
     return f"{host}:{port}"
 
 
@@ -67,7 +68,7 @@ def _wait_ready(channel: grpc.Channel, timeout_s: float = 5.0) -> None:
     raise RuntimeError(
         f"ParaKV server at {_endpoint()} not reachable "
         f"(last channel state: {last_state}). "
-        f"Start it with `./parakv --port=8200` or set PARAKV_HOST/PARAKV_PORT."
+        f"Start it with `./parakv --port=9200` or set PARAKV_HOST/PARAKV_PORT."
     )
 
 def _wait_ready_socket(host: str, port: int, timeout_s: float = 10.0) -> None:
@@ -88,17 +89,19 @@ def background_service():
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     )
-    _wait_ready_socket("127.0.0.1", 8200)
+    _wait_ready_socket("127.0.0.1", 9200)
 
-    yield {"host": "127.0.0.1", "port": 8200}
+    yield {"host": "127.0.0.1", "port": 9200}
 
     try:
         proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=5.0)
+        proc.wait(timeout=30.0)
     except:
         proc.kill()
         proc.wait()
 
+    # shutil.rmtree("logs", ignore_errors=True)
+    # shutil.rmtree("segment_workspace", ignore_errors=True)
 
 
 @pytest.fixture(scope="session")
@@ -120,10 +123,15 @@ def stub(channel: grpc.Channel) -> pb_grpc.KVCacheStorageServiceStub:
     return pb_grpc.KVCacheStorageServiceStub(channel)
 
 
-@pytest.fixture()
-def namespace() -> str:
+@pytest.fixture(params=[
+    "pytest-ns-a", "pytest-ns-a", "pytest-ns-b", "random-ns"], 
+    ids=["ns-a", "ns-a2", "ns-b", "random-ns"])
+def namespace(request) -> str:
     """Per-test namespace so tests can run in parallel and be re-run safely."""
-    return f"pytest-{uuid.uuid4().hex[:12]}"
+    if request.param == "random-ns":
+        return f"pytest-{uuid.uuid4().hex[:12]}"
+
+    return request.param
 
 
 @pytest.fixture(scope="session")

@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "parakv/core/index/index.h"
 
+#include <glog/logging.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -57,7 +58,17 @@ Index<KeyT, Hash, Eq>::Index(Options opts)
 
 template <typename KeyT, typename Hash, typename Eq>
 Index<KeyT, Hash, Eq>::~Index() {
-  Close();
+  // Best-effort persistence as a safety net. Callers should invoke
+  // Checkpoint()/Close() explicitly during graceful shutdown so this path
+  // does not have to fire during static destruction (where logging or
+  // file I/O may be unreliable).
+  //
+  // Order matters: Checkpoint() needs an open WAL writer to rotate
+  // (truncate) it after dumping the snapshot. Calling Close() first would
+  // make RotateWal() observe wal_==nullptr and skip the rotation, leaving
+  // a stale WAL behind.
+  (void)Checkpoint();
+  (void)Close();
 }
 
 template <typename KeyT, typename Hash, typename Eq>
@@ -308,9 +319,13 @@ Status Index<KeyT, Hash, Eq>::LookupRaw(const void* key_input, size_t key_size,
 
 template <typename KeyT, typename Hash, typename Eq>
 Status Index<KeyT, Hash, Eq>::Checkpoint() {
+  LOG(INFO) << opts_.namespace_name << " checkpointing";
+
   std::lock_guard<std::mutex> lock(checkpoint_mutex_);
 
   if (opts_.snapshot_dir.empty()) {
+    LOG(INFO) << opts_.namespace_name
+              << " checkpoint failed: snapshot_dir is empty";
     return Status::kInvalidArgument;
   }
 
@@ -332,12 +347,15 @@ Status Index<KeyT, Hash, Eq>::Checkpoint() {
 
 template <typename KeyT, typename Hash, typename Eq>
 Status Index<KeyT, Hash, Eq>::DumpSnapshot(const std::string& path) const {
+  LOG(INFO) << opts_.namespace_name << " dumping snapshot to " << path;
+
   phmap::BinaryOutputArchive ar(path.c_str());
   // parallel_flat_hash_map::phmap_dump iterates over all sub-maps, briefly
   // holding each sub-map's lock, so writers on other sub-maps keep running.
   if (!map_.phmap_dump(ar)) {
     return Status::kIOError;
   }
+
   return Status::kOk;
 }
 
