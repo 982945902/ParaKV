@@ -18,7 +18,7 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 
-#include "core/kvcache_storage/kvcache_storage_backend.h"
+#include "core/kvcache_storage/backend_namespace_manager.h"
 #include "kvcache_storage_service.pb.h"
 
 namespace parakv {
@@ -40,9 +40,9 @@ class KVCacheStorageServiceImpl final
     : public parakv::proto::KVCacheStorageService {
  public:
   explicit KVCacheStorageServiceImpl(
-      std::shared_ptr<kvcache_storage::KVCacheStorageBackend> backend);
+      std::shared_ptr<kvcache_storage::BackendNamespaceManager> manager);
   KVCacheStorageServiceImpl(
-      std::shared_ptr<kvcache_storage::KVCacheStorageBackend> backend,
+      std::shared_ptr<kvcache_storage::BackendNamespaceManager> manager,
       ServiceOptions options);
   ~KVCacheStorageServiceImpl() override;
 
@@ -61,7 +61,7 @@ class KVCacheStorageServiceImpl final
                  google::protobuf::Closure* done) override;
 
  private:
-  std::shared_ptr<kvcache_storage::KVCacheStorageBackend> backend_;
+  std::shared_ptr<kvcache_storage::BackendNamespaceManager> manager_;
   ServiceOptions options_;
 };
 

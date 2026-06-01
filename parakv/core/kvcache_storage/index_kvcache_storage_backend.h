@@ -19,7 +19,6 @@ limitations under the License.
 #include <memory>
 #include <mutex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "parakv/core/index/index.h"
@@ -30,11 +29,14 @@ namespace parakv {
 namespace kvcache_storage {
 
 // Index-backed KVCache storage backend using Index<Key128>.
+// Each instance serves a single namespace; namespace routing is handled
+// by BackendNamespaceManager.
 // Expected key format: exactly 16 bytes.
 class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
  public:
   struct Options {
     std::string root_dir = "/tmp/parakv-index128-backend";
+    std::string namespace_name;
     uint64_t segment_size = 64ULL * 1024 * 1024;
     uint32_t slot_value_size = 4096;
     uint32_t segment_count = 1;
@@ -44,19 +46,16 @@ class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
   explicit IndexKVCacheStorageBackend(Options opts);
   ~IndexKVCacheStorageBackend() override;
 
-  WriteResult Put(const std::string& ns, const std::string& key,
-                  const std::string& value, const std::string& metadata,
+  WriteResult Put(const std::string& key, const std::string& value,
+                  const std::string& metadata,
                   const WriteOptions& opts) override;
 
-  ReadResult Get(const std::string& ns, const std::string& key,
-                 const ReadOptions& opts) override;
+  ReadResult Get(const std::string& key, const ReadOptions& opts) override;
 
-  // Iterate every namespace, dump a snapshot and close its index/WAL.
-  // Idempotent: subsequent calls are no-ops because namespaces_ is cleared.
   void Close() override;
 
  private:
-  struct NamespaceContext {
+  struct Context {
     std::shared_ptr<segment::SegmentManager> segment_manager;
     std::shared_ptr<index::Index128> index;
     std::vector<std::shared_ptr<segment::SegmentBase>> segments;
@@ -65,7 +64,6 @@ class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
   static constexpr uint32_t kHeaderBytes = 8;  // value_len(4) + metadata_len(4)
 
   BackendCode EnsureValidOptions() const;
-  BackendCode ParseKey128(const std::string& key, index::Key128* out) const;
   BackendCode EncodePayload(const std::string& value,
                             const std::string& metadata,
                             std::vector<uint8_t>* payload,
@@ -75,15 +73,12 @@ class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
                             std::string* err) const;
   BackendCode ToBackendCode(parakv::Status s) const;
 
-  std::shared_ptr<NamespaceContext> GetOrCreateNamespace(const std::string& ns,
-                                                         BackendCode* code,
-                                                         std::string* message);
-  static std::string SanitizeNs(const std::string& ns);
+  std::shared_ptr<Context> GetOrCreateContext(BackendCode* code,
+                                              std::string* message);
 
   Options options_;
   mutable std::mutex mu_;
-  std::unordered_map<std::string, std::shared_ptr<NamespaceContext>>
-      namespaces_;
+  std::shared_ptr<Context> context_;
 };
 
 }  // namespace kvcache_storage

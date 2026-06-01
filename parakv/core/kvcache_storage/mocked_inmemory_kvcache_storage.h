@@ -39,12 +39,11 @@ class MockedInMemoryKVCacheStorage final : public KVCacheStorageBackend {
   explicit MockedInMemoryKVCacheStorage(Options opts);
   ~MockedInMemoryKVCacheStorage() override;
 
-  WriteResult Put(const std::string& ns, const std::string& key,
-                  const std::string& value, const std::string& metadata,
+  WriteResult Put(const std::string& key, const std::string& value,
+                  const std::string& metadata,
                   const WriteOptions& opts) override;
 
-  ReadResult Get(const std::string& ns, const std::string& key,
-                 const ReadOptions& opts) override;
+  ReadResult Get(const std::string& key, const ReadOptions& opts) override;
 
   size_t size() const;
 
@@ -56,11 +55,10 @@ class MockedInMemoryKVCacheStorage final : public KVCacheStorageBackend {
   };
 
   static uint64_t NowMs();
-  static std::string MakeKey(const std::string& ns, const std::string& key);
 
   Options options_;
   mutable std::mutex mu_;
-  std::unordered_map<std::string, Entry> store_;  // key = ns + '\0' + key
+  std::unordered_map<std::string, Entry> store_;
 };
 
 }  // namespace kvcache_storage

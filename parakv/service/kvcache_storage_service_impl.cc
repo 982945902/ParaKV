@@ -21,6 +21,8 @@ limitations under the License.
 
 #include <utility>
 
+#include "core/index/key.h"
+
 namespace parakv {
 namespace service {
 
@@ -82,14 +84,15 @@ void FillItemError(BatchReadResult* r, const std::string& key, StatusCode code,
 }  // namespace
 
 KVCacheStorageServiceImpl::KVCacheStorageServiceImpl(
-    std::shared_ptr<kvcache_storage::KVCacheStorageBackend> backend)
-    : KVCacheStorageServiceImpl(std::move(backend), ServiceOptions{}) {}
+    std::shared_ptr<kvcache_storage::BackendNamespaceManager> manager)
+    : KVCacheStorageServiceImpl(std::move(manager), ServiceOptions{}) {}
 
 KVCacheStorageServiceImpl::KVCacheStorageServiceImpl(
-    std::shared_ptr<kvcache_storage::KVCacheStorageBackend> backend,
+    std::shared_ptr<kvcache_storage::BackendNamespaceManager> manager,
     ServiceOptions options)
-    : backend_(std::move(backend)), options_(options) {
-  CHECK(backend_ != nullptr) << "KVCacheStorageServiceImpl requires a backend";
+    : manager_(std::move(manager)), options_(options) {
+  CHECK(manager_ != nullptr)
+      << "KVCacheStorageServiceImpl requires a namespace manager";
 }
 
 KVCacheStorageServiceImpl::~KVCacheStorageServiceImpl() = default;
@@ -146,14 +149,29 @@ void KVCacheStorageServiceImpl::BatchWrite(
     WriteOptions opts = base_opts;
     opts.ttl_ms = item.ttl_ms();
 
-    WriteResult r = backend_->Put(request->namespace_(), item.key(),
+    WriteResult r = manager_->Put(request->namespace_(), item.key(),
                                   item.value(), item.metadata(), opts);
     out->set_key(item.key());
     out->set_code(ToProtoCode(r.code));
     if (!r.message.empty()) out->set_message(r.message);
+
+    index::Key128 k;
     if (r.code == BackendCode::kOk) {
+      if (index::Key128::FromString(item.key(), &k)) {
+        LOG(INFO) << "Write success: key=" << k.ToString();
+      } else {
+        LOG(INFO) << "Write success: key=" << item.key();
+      }
       ++success;
     } else {
+      if (index::Key128::FromString(item.key(), &k)) {
+        LOG(ERROR) << "Write failed: key=" << k.ToString()
+                   << " code=" << static_cast<int>(r.code);
+      } else {
+        LOG(ERROR) << "Write failed: key=" << item.key()
+                   << " code=" << static_cast<int>(r.code);
+      }
+      //  << " message=" << r.message;
       ++failure;
     }
   }
@@ -206,7 +224,7 @@ void KVCacheStorageServiceImpl::BatchRead(
       continue;
     }
 
-    ReadResult r = backend_->Get(request->namespace_(), key, opts);
+    ReadResult r = manager_->Get(request->namespace_(), key, opts);
     out->set_key(key);
     out->set_code(ToProtoCode(r.code));
     if (!r.message.empty()) out->set_message(r.message);

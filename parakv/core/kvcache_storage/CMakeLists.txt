@@ -7,10 +7,12 @@ cc_library(
     HDRS
         kvcache_storage_backend.h
         backend_registry.h
+        backend_namespace_manager.h
         mocked_inmemory_kvcache_storage.h
         index_kvcache_storage_backend.h
     SRCS
         backend_registry.cc
+        backend_namespace_manager.cc
         mocked_inmemory_kvcache_storage.cc
         index_kvcache_storage_backend.cc
     DEPS

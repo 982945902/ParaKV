@@ -102,16 +102,6 @@ BackendCode IndexKVCacheStorageBackend::EnsureValidOptions() const {
   return BackendCode::kOk;
 }
 
-BackendCode IndexKVCacheStorageBackend::ParseKey128(const std::string& key,
-                                                    index::Key128* out) const {
-  if (out == nullptr || key.size() != sizeof(index::Key128)) {
-    return BackendCode::kInvalidArgument;
-  }
-  std::memcpy(out, key.data(), sizeof(index::Key128));
-
-  return BackendCode::kOk;
-}
-
 BackendCode IndexKVCacheStorageBackend::EncodePayload(
     const std::string& value, const std::string& metadata,
     std::vector<uint8_t>* payload, std::string* err) const {
@@ -125,6 +115,10 @@ BackendCode IndexKVCacheStorageBackend::EncodePayload(
     if (err != nullptr) {
       *err = "value+metadata exceeds slot_value_size";
     }
+
+    LOG(ERROR) << "Value+metadata exceeds slot_value_size: value.size()="
+               << value.size() << " metadata.size()=" << metadata.size()
+               << " total=" << total << " max_payload=" << max_payload;
 
     return BackendCode::kValueTooLarge;
   }
@@ -188,32 +182,12 @@ BackendCode IndexKVCacheStorageBackend::ToBackendCode(parakv::Status s) const {
   }
 }
 
-std::string IndexKVCacheStorageBackend::SanitizeNs(const std::string& ns) {
-  std::string out;
-  out.reserve(ns.size());
-  for (char c : ns) {
-    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-        (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') {
-      out.push_back(c);
-    } else {
-      out.push_back('_');
-    }
-  }
-  if (out.empty()) {
-    out = "default";
-  }
-
-  return out;
-}
-
-std::shared_ptr<IndexKVCacheStorageBackend::NamespaceContext>
-IndexKVCacheStorageBackend::GetOrCreateNamespace(const std::string& ns,
-                                                 BackendCode* code,
-                                                 std::string* message) {
+std::shared_ptr<IndexKVCacheStorageBackend::Context>
+IndexKVCacheStorageBackend::GetOrCreateContext(BackendCode* code,
+                                               std::string* message) {
   std::lock_guard<std::mutex> lock(mu_);
-  auto it = namespaces_.find(ns);
-  if (it != namespaces_.end()) {
-    return it->second;
+  if (context_) {
+    return context_;
   }
 
   if (EnsureValidOptions() != BackendCode::kOk) {
@@ -223,17 +197,15 @@ IndexKVCacheStorageBackend::GetOrCreateNamespace(const std::string& ns,
     if (message) {
       *message = "invalid index backend options";
     }
-
     return nullptr;
   }
 
-  const std::string ns_dir = options_.root_dir + "/" + SanitizeNs(ns);
-  if (!EnsureDir(ns_dir)) {
+  if (!EnsureDir(options_.root_dir)) {
     if (code) {
       *code = BackendCode::kIOError;
     }
     if (message) {
-      *message = "failed to create namespace directory";
+      *message = "failed to create backend directory";
     }
     return nullptr;
   }
@@ -248,7 +220,7 @@ IndexKVCacheStorageBackend::GetOrCreateNamespace(const std::string& ns,
   opened_segments.reserve(options_.segment_count);
   for (uint32_t i = 0; i < options_.segment_count; ++i) {
     std::ostringstream seg_path;
-    seg_path << ns_dir << "/segment_" << i << ".dat";
+    seg_path << options_.root_dir << "/segment_" << i << ".dat";
     auto seg =
         std::make_shared<segment::SegmentFile>(i, seg_cfg, seg_path.str());
     parakv::Status s = seg->Open();
@@ -278,9 +250,9 @@ IndexKVCacheStorageBackend::GetOrCreateNamespace(const std::string& ns,
   idx_opts.segment_manager = mgr;
   idx_opts.segment_config = seg_cfg;
   idx_opts.wal_checkpoint_bytes = options_.wal_checkpoint_bytes;
-  idx_opts.wal_path = ns_dir + "/index.wal";
-  idx_opts.snapshot_dir = ns_dir;
-  idx_opts.namespace_name = ns;
+  idx_opts.wal_path = options_.root_dir + "/index.wal";
+  idx_opts.snapshot_dir = options_.root_dir;
+  idx_opts.namespace_name = options_.namespace_name;
 
   auto idx = std::make_shared<index::Index128>(idx_opts);
   parakv::Status s = idx->Open();
@@ -295,31 +267,30 @@ IndexKVCacheStorageBackend::GetOrCreateNamespace(const std::string& ns,
   }
   idx->AttachToSegmentManager();
 
-  auto ctx = std::make_shared<NamespaceContext>();
+  auto ctx = std::make_shared<Context>();
   ctx->segment_manager = mgr;
   ctx->index = idx;
   ctx->segments = std::move(opened_segments);
-  namespaces_[ns] = ctx;
+  context_ = ctx;
   if (code) {
     *code = BackendCode::kOk;
   }
   return ctx;
 }
 
-WriteResult IndexKVCacheStorageBackend::Put(const std::string& ns,
-                                            const std::string& key,
+WriteResult IndexKVCacheStorageBackend::Put(const std::string& key,
                                             const std::string& value,
                                             const std::string& metadata,
                                             const WriteOptions& opts) {
   index::Key128 k{};
-  BackendCode c = ParseKey128(key, &k);
-  if (c != BackendCode::kOk) {
-    return {c, "key must be exactly 16 bytes (Key128)"};
+  if (!index::Key128::FromString(key, &k)) {
+    return {BackendCode::kInvalidArgument,
+            "key must be exactly 16 bytes (Key128)"};
   }
 
   BackendCode create_code = BackendCode::kOk;
   std::string create_msg;
-  auto ctx = GetOrCreateNamespace(ns, &create_code, &create_msg);
+  auto ctx = GetOrCreateContext(&create_code, &create_msg);
   if (!ctx) {
     return {create_code, create_msg};
   }
@@ -337,7 +308,7 @@ WriteResult IndexKVCacheStorageBackend::Put(const std::string& ns,
 
   std::vector<uint8_t> payload;
   std::string err;
-  c = EncodePayload(value, metadata, &payload, &err);
+  BackendCode c = EncodePayload(value, metadata, &payload, &err);
   if (c != BackendCode::kOk) {
     return {c, err};
   }
@@ -349,21 +320,23 @@ WriteResult IndexKVCacheStorageBackend::Put(const std::string& ns,
   return {BackendCode::kOk, {}};
 }
 
-ReadResult IndexKVCacheStorageBackend::Get(const std::string& ns,
-                                           const std::string& key,
+ReadResult IndexKVCacheStorageBackend::Get(const std::string& key,
                                            const ReadOptions& opts) {
   index::Key128 k{};
-  BackendCode c = ParseKey128(key, &k);
-  if (c != BackendCode::kOk) {
-    return {c, "key must be exactly 16 bytes (Key128)", {}, {}, 0};
+  if (!index::Key128::FromString(key, &k)) {
+    return {BackendCode::kInvalidArgument,
+            "key must be exactly 16 bytes (Key128)",
+            {},
+            {},
+            0};
   }
 
-  LOG(INFO) << "IndexKVCacheStorageBackend::Get: namespace='" << ns
-            << "', key='" << key << "'";
+  LOG(INFO) << "IndexKVCacheStorageBackend::Get: namespace='"
+            << options_.namespace_name << "', key='" << k.ToString() << "'";
 
   BackendCode create_code = BackendCode::kOk;
   std::string create_msg;
-  auto ctx = GetOrCreateNamespace(ns, &create_code, &create_msg);
+  auto ctx = GetOrCreateContext(&create_code, &create_msg);
   if (!ctx) {
     return {create_code, create_msg, {}, {}, 0};
   }
@@ -378,51 +351,44 @@ ReadResult IndexKVCacheStorageBackend::Get(const std::string& ns,
             0};
   }
 
-  std::string value;
-  std::string metadata;
+  std::string val;
+  std::string meta;
   std::string err;
-  c = DecodePayload(payload, &value, &metadata, &err);
+  BackendCode c = DecodePayload(payload, &val, &meta, &err);
   if (c != BackendCode::kOk) {
     return {c, err, {}, {}, 0};
   }
 
   ReadResult r;
   r.code = BackendCode::kOk;
-  r.metadata = metadata;
+  r.metadata = meta;
   if (opts.include_value) {
-    r.value = value;
+    r.value = val;
   }
 
   return r;
 }
 
 void IndexKVCacheStorageBackend::Close() {
-  // Move out the namespaces under the lock so we drop the lock before
-  // doing potentially slow disk I/O (snapshot dump), and so a second
-  // Close() call observes an empty map and becomes a no-op.
-  std::unordered_map<std::string, std::shared_ptr<NamespaceContext>> taken;
+  std::shared_ptr<Context> ctx;
   {
     std::lock_guard<std::mutex> lock(mu_);
-    taken.swap(namespaces_);
+    ctx.swap(context_);
   }
 
-  LOG(INFO) << "IndexKVCacheStorageBackend::Close: closing " << taken.size()
-            << " namespaces";
-
-  for (auto& kv : taken) {
-    auto& ctx = kv.second;
-    if (!ctx || !ctx->index) {
-      continue;
-    }
-    LOG(INFO) << "IndexKVCacheStorageBackend::Close: checkpointing namespace='"
-              << kv.first << "'";
-    parakv::Status s = ctx->index->Checkpoint();
-    if (s != parakv::Status::kOk) {
-      LOG(WARNING) << "Checkpoint failed for namespace='" << kv.first
-                   << "', status=" << static_cast<int>(s);
-    }
-    (void)ctx->index->Close();
+  if (!ctx || !ctx->index) {
+    return;
   }
+
+  LOG(INFO) << "IndexKVCacheStorageBackend::Close: checkpointing namespace='"
+            << options_.namespace_name << "'";
+  parakv::Status s = ctx->index->Checkpoint();
+  if (s != parakv::Status::kOk) {
+    LOG(WARNING) << "Checkpoint failed for namespace='"
+                 << options_.namespace_name
+                 << "', status=" << static_cast<int>(s);
+  }
+  (void)ctx->index->Close();
 }
 
 }  // namespace kvcache_storage

@@ -26,14 +26,14 @@ namespace kvcache_storage {
 // need to depend on protobuf types.
 enum class BackendCode : int {
   kOk = 0,
-  kNotFound,
-  kAlreadyExists,
-  kValueTooLarge,
-  kStorageFull,
-  kIOError,
-  kUnavailable,
-  kCorrupted,
-  kInvalidArgument,
+  kNotFound = 1,
+  kAlreadyExists = 2,
+  kValueTooLarge = 3,
+  kStorageFull = 5,
+  kIOError = 6,
+  kUnavailable = 7,
+  kCorrupted = 8,
+  kInvalidArgument = 9,
 };
 
 struct WriteOptions {
@@ -68,14 +68,13 @@ class KVCacheStorageBackend {
   virtual ~KVCacheStorageBackend() = default;
 
   // Write one entry. `key`, `value`, `metadata` are owned by the caller.
-  virtual WriteResult Put(const std::string& ns, const std::string& key,
-                          const std::string& value, const std::string& metadata,
+  virtual WriteResult Put(const std::string& key, const std::string& value,
+                          const std::string& metadata,
                           const WriteOptions& opts) = 0;
 
   // Read one entry. On miss the backend must set `code == kNotFound` and
   // leave `value`/`metadata` empty.
-  virtual ReadResult Get(const std::string& ns, const std::string& key,
-                         const ReadOptions& opts) = 0;
+  virtual ReadResult Get(const std::string& key, const ReadOptions& opts) = 0;
 
   // Flush in-memory state to durable storage (snapshot + WAL rotation, etc.)
   // and stop accepting further writes. Must be safe to call multiple times

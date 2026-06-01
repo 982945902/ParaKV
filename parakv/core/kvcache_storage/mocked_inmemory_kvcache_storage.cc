@@ -40,18 +40,7 @@ uint64_t MockedInMemoryKVCacheStorage::NowMs() {
       .count();
 }
 
-std::string MockedInMemoryKVCacheStorage::MakeKey(const std::string& ns,
-                                                  const std::string& key) {
-  std::string out;
-  out.reserve(ns.size() + 1 + key.size());
-  out.append(ns);
-  out.push_back('\0');
-  out.append(key);
-  return out;
-}
-
-WriteResult MockedInMemoryKVCacheStorage::Put(const std::string& ns,
-                                              const std::string& key,
+WriteResult MockedInMemoryKVCacheStorage::Put(const std::string& key,
                                               const std::string& value,
                                               const std::string& metadata,
                                               const WriteOptions& opts) {
@@ -66,9 +55,8 @@ WriteResult MockedInMemoryKVCacheStorage::Put(const std::string& ns,
   entry.metadata = metadata;
   entry.expiration_ms = ttl_ms > 0 ? (NowMs() + ttl_ms) : 0;
 
-  const std::string full_key = MakeKey(ns, key);
   std::lock_guard<std::mutex> lock(mu_);
-  auto it = store_.find(full_key);
+  auto it = store_.find(key);
   if (it != store_.end()) {
     const bool expired =
         it->second.expiration_ms > 0 && it->second.expiration_ms <= NowMs();
@@ -77,17 +65,15 @@ WriteResult MockedInMemoryKVCacheStorage::Put(const std::string& ns,
     }
     it->second = std::move(entry);
   } else {
-    store_.emplace(full_key, std::move(entry));
+    store_.emplace(key, std::move(entry));
   }
   return {BackendCode::kOk, {}};
 }
 
-ReadResult MockedInMemoryKVCacheStorage::Get(const std::string& ns,
-                                             const std::string& key,
+ReadResult MockedInMemoryKVCacheStorage::Get(const std::string& key,
                                              const ReadOptions& opts) {
-  const std::string full_key = MakeKey(ns, key);
   std::lock_guard<std::mutex> lock(mu_);
-  auto it = store_.find(full_key);
+  auto it = store_.find(key);
   if (it == store_.end()) {
     return {BackendCode::kNotFound, "miss", {}, {}, 0};
   }

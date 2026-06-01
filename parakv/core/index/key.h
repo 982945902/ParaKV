@@ -17,7 +17,9 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
+#include <string>
 #include <type_traits>
 
 namespace parakv {
@@ -48,6 +50,34 @@ struct alignas(16) Key128 {
 
   bool operator<(const Key128& rhs) const noexcept {
     return hi < rhs.hi || (hi == rhs.hi && lo < rhs.lo);
+  }
+
+  // Parse a 16-byte binary string into a Key128.
+  // Returns true on success, false if data is null or len != 16.
+  static bool FromRaw(const void* data, size_t len, Key128* out) {
+    if (out == nullptr || data == nullptr || len != sizeof(Key128)) {
+      return false;
+    }
+    std::memcpy(out, data, sizeof(Key128));
+    return true;
+  }
+
+  static bool FromString(const std::string& s, Key128* out) {
+    return FromRaw(s.data(), s.size(), out);
+  }
+
+  std::string ToString() const {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string out(32, '0');
+    for (int i = 0; i < 16; ++i) {
+      uint8_t byte = static_cast<uint8_t>(hi >> (60 - i * 4)) & 0xF;
+      out[i] = kHex[byte];
+    }
+    for (int i = 0; i < 16; ++i) {
+      uint8_t byte = static_cast<uint8_t>(lo >> (60 - i * 4)) & 0xF;
+      out[16 + i] = kHex[byte];
+    }
+    return out;
   }
 };
 

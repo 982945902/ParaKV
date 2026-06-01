@@ -21,7 +21,9 @@ limitations under the License.
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
+#include "core/kvcache_storage/backend_namespace_manager.h"
 #include "core/kvcache_storage/backend_registry.h"
 #include "service/kvcache_storage_service_impl.h"
 
@@ -36,11 +38,13 @@ DEFINE_string(backend, "kvcache_memory",
 DEFINE_string(backend_opts, "",
               "Comma-separated key=value list passed to the backend factory, "
               "e.g. --backend_opts=max_value_bytes=1048576,default_ttl_ms=0");
+DEFINE_string(
+    namespaces, "default",
+    "Comma-separated list of namespace names to pre-register. "
+    "Each namespace gets its own backend instance created at startup.");
 
 namespace {
 
-// Parse "k1=v1,k2=v2" into BackendConfig. Whitespace around keys / values is
-// trimmed; empty segments and segments without '=' are skipped with a warning.
 parakv::kvcache_storage::BackendConfig ParseBackendOpts(const std::string& s) {
   parakv::kvcache_storage::BackendConfig cfg;
   std::stringstream ss(s);
@@ -61,6 +65,19 @@ parakv::kvcache_storage::BackendConfig ParseBackendOpts(const std::string& s) {
   return cfg;
 }
 
+std::vector<std::string> ParseNamespaces(const std::string& s) {
+  std::vector<std::string> result;
+  std::stringstream ss(s);
+  std::string token;
+  while (std::getline(ss, token, ',')) {
+    const auto first = token.find_first_not_of(" \t");
+    const auto last = token.find_last_not_of(" \t");
+    if (first == std::string::npos) continue;
+    result.push_back(token.substr(first, last - first + 1));
+  }
+  return result;
+}
+
 std::string JoinRegisteredNames() {
   const auto names =
       parakv::kvcache_storage::BackendRegistry::Instance().RegisteredNames();
@@ -78,23 +95,45 @@ int main(int argc, char* argv[]) {
   google::ParseCommandLineFlags(&argc, &argv, true);
   google::InitGoogleLogging(argv[0]);
 
-  // parakv::kvcache_storage::RegisterBuiltinBackends();
-
-  auto cfg = ParseBackendOpts(FLAGS_backend_opts);
-  auto backend = parakv::kvcache_storage::BackendRegistry::Instance().Create(
-      FLAGS_backend, cfg);
-  if (!backend) {
-    LOG(ERROR) << "Failed to create backend '" << FLAGS_backend
+  const std::string backend_name = FLAGS_backend;
+  if (!parakv::kvcache_storage::BackendRegistry::Instance().IsRegistered(
+          backend_name)) {
+    LOG(ERROR) << "Unknown backend '" << backend_name
                << "'. Available backends: [" << JoinRegisteredNames() << "]";
     return -1;
   }
-  LOG(INFO) << "KVCache backend: " << FLAGS_backend;
+  LOG(INFO) << "KVCache backend: " << backend_name;
+
+  auto base_cfg = ParseBackendOpts(FLAGS_backend_opts);
+  const auto ns_list = ParseNamespaces(FLAGS_namespaces);
+  if (ns_list.empty()) {
+    LOG(ERROR) << "--namespaces must contain at least one namespace name";
+    return -1;
+  }
+
+  auto manager =
+      std::make_shared<parakv::kvcache_storage::BackendNamespaceManager>();
+
+  for (const auto& ns : ns_list) {
+    auto cfg = base_cfg;
+    cfg.Set("namespace", ns);
+    auto backend = parakv::kvcache_storage::BackendRegistry::Instance().Create(
+        backend_name, cfg);
+    if (!backend) {
+      LOG(ERROR) << "Failed to create backend for namespace '" << ns << "'";
+      return -1;
+    }
+    if (!manager->Register(ns, std::move(backend))) {
+      LOG(ERROR) << "Failed to register namespace '" << ns << "'";
+      return -1;
+    }
+  }
 
   parakv::service::ServiceOptions svc_opts;
   svc_opts.max_batch_size = static_cast<uint32_t>(FLAGS_max_batch_size);
   svc_opts.max_value_bytes = FLAGS_max_value_bytes;
   auto service_impl =
-      std::make_unique<parakv::service::KVCacheStorageServiceImpl>(backend,
+      std::make_unique<parakv::service::KVCacheStorageServiceImpl>(manager,
                                                                    svc_opts);
 
   brpc::Server server;
@@ -116,13 +155,8 @@ int main(int argc, char* argv[]) {
 
   std::cout << "Press Enter to shutdown..." << std::endl;
 
-  // Graceful shutdown: brpc has stopped serving, but RPC worker bthreads or
-  // other shared_ptr holders may still keep the backend alive past the end
-  // of main(). Trigger an explicit checkpoint NOW, while glog and the file
-  // system are guaranteed to be available, instead of relying on the Index
-  // destructor which may run too late (or never, if SIGKILL is delivered).
   LOG(INFO) << "Shutting down KVCache backend...";
-  backend->Close();
+  manager->Close();
   LOG(INFO) << "KVCache backend shutdown complete.";
 
   return 0;

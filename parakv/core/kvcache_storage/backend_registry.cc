@@ -23,6 +23,7 @@ limitations under the License.
 #include <cstring>
 #include <utility>
 
+#include "backend_namespace_manager.h"
 #include "common/global_gflags.h"
 #include "index_kvcache_storage_backend.h"
 #include "mocked_inmemory_kvcache_storage.h"
@@ -199,10 +200,16 @@ PARAKV_REGISTER_KVCACHE_BACKEND(
     "kvcache_index128",
     [](const ::parakv::kvcache_storage::BackendConfig& cfg)
         -> std::shared_ptr<::parakv::kvcache_storage::KVCacheStorageBackend> {
+      const auto ns = cfg.Get("namespace", "default");
+      const auto sanitized =
+          ::parakv::kvcache_storage::BackendNamespaceManager::SanitizeNs(ns);
+
       ::parakv::kvcache_storage::IndexKVCacheStorageBackend::Options opts;
-      opts.root_dir = FLAGS_segement_workspace_path;
+      opts.root_dir =
+          std::string(FLAGS_segement_workspace_path) + "/" + sanitized;
+      opts.namespace_name = ns;
       opts.segment_size = FLAGS_segment_size;
-      opts.slot_value_size = FLAGS_segment_value_size;  //
+      opts.slot_value_size = FLAGS_segment_value_size;
       opts.segment_count = FLAGS_segment_count;
       opts.wal_checkpoint_bytes = FLAGS_index_wal_checkpoint_bytes;
 
