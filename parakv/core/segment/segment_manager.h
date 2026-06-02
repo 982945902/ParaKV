@@ -58,6 +58,18 @@ class SegmentManager {
   // Release a segment to IDLE pool (after compaction).
   Status ReleaseSegment(uint32_t segment_id);
 
+  // ---- State persistence ----
+
+  // Save the manager's classification state (idle / appending / full order)
+  // to a binary file so it can be restored across service restarts.
+  Status SaveState(const std::string& path) const;
+
+  // Load a previously persisted state file and reclassify segments
+  // accordingly.  Must be called AFTER all segments have been added via
+  // AddSegment().  Segment IDs present in the file but missing from the
+  // manager are silently skipped.
+  Status LoadState(const std::string& path);
+
   // ---- Compaction ----
 
   void SetSlotMoveCallback(SlotMoveCallback cb) {
@@ -84,6 +96,9 @@ class SegmentManager {
   uint32_t GetIdleSegments() const;
   uint32_t GetFullSegments() const;
 
+  // Return FULL segment IDs in the order they became full (oldest first).
+  std::vector<uint32_t> GetFullSegmentOrder() const;
+
  private:
   std::shared_ptr<SegmentBase> PromoteIdleSegment();
 
@@ -95,7 +110,11 @@ class SegmentManager {
 
   std::unordered_set<uint32_t> idle_set_;
   std::unordered_set<uint32_t> appending_set_;
+
+  // FULL segments: full_set_ for O(1) membership test, full_order_ preserves
+  // the chronological order in which segments became full (oldest first).
   std::unordered_set<uint32_t> full_set_;
+  std::vector<uint32_t> full_order_;
 
   // Hot segment tracking
   std::unordered_map<uint32_t, uint64_t> access_counters_;

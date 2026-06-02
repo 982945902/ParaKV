@@ -16,6 +16,7 @@ cc_library(
         segment_manager.cc
     DEPS
         Threads::Threads
+        glog::glog
 )
 
 

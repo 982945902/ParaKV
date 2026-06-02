@@ -42,10 +42,12 @@ class BackendNamespaceManager {
   bool Register(const std::string& ns,
                 std::shared_ptr<KVCacheStorageBackend> backend);
 
+  // Write one entry.
   WriteResult Put(const std::string& ns, const std::string& key,
                   const std::string& value, const std::string& metadata,
                   const WriteOptions& opts);
 
+  // Read one entry.
   ReadResult Get(const std::string& ns, const std::string& key,
                  const ReadOptions& opts);
 

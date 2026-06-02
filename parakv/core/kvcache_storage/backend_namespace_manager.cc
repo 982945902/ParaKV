@@ -89,6 +89,7 @@ WriteResult BackendNamespaceManager::Put(const std::string& ns,
     return {BackendCode::kInvalidArgument,
             "namespace '" + ns + "' is not registered"};
   }
+
   return backend->Put(key, value, metadata, opts);
 }
 
@@ -103,6 +104,7 @@ ReadResult BackendNamespaceManager::Get(const std::string& ns,
             {},
             0};
   }
+
   return backend->Get(key, opts);
 }
 

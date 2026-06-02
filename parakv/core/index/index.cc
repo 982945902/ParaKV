@@ -230,6 +230,11 @@ Status Index<KeyT, Hash, Eq>::Get(const KeyT& key, void* value_out,
 }
 
 template <typename KeyT, typename Hash, typename Eq>
+bool Index<KeyT, Hash, Eq>::Contains(const KeyT& key) const {
+  return map_.contains(key);
+}
+
+template <typename KeyT, typename Hash, typename Eq>
 Status Index<KeyT, Hash, Eq>::Delete(const KeyT& key) {
   // Atomically remove while capturing the previous encoded offset under the
   // sub-map's write lock.

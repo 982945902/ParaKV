@@ -246,6 +246,14 @@ IndexKVCacheStorageBackend::GetOrCreateContext(BackendCode* code,
     opened_segments.push_back(seg);
   }
 
+  // Restore segment manager state (full-order, etc.) from a previous run.
+  const std::string state_path = options_.root_dir + "/segment_manager.state";
+  parakv::Status ls = mgr->LoadState(state_path);
+  if (ls != parakv::Status::kOk) {
+    LOG(WARNING) << "SegmentManager::LoadState returned "
+                 << static_cast<int>(ls) << " for " << state_path;
+  }
+
   index::Index128::Options idx_opts;
   idx_opts.segment_manager = mgr;
   idx_opts.segment_config = seg_cfg;
@@ -388,6 +396,17 @@ void IndexKVCacheStorageBackend::Close() {
                  << options_.namespace_name
                  << "', status=" << static_cast<int>(s);
   }
+
+  // Persist segment manager state so full-segment order survives restarts.
+  if (ctx->segment_manager) {
+    const std::string state_path = options_.root_dir + "/segment_manager.state";
+    parakv::Status ss = ctx->segment_manager->SaveState(state_path);
+    if (ss != parakv::Status::kOk) {
+      LOG(WARNING) << "SegmentManager::SaveState failed for namespace='"
+                   << options_.namespace_name << "'";
+    }
+  }
+
   (void)ctx->index->Close();
 }
 

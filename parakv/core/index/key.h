@@ -58,7 +58,9 @@ struct alignas(16) Key128 {
     if (out == nullptr || data == nullptr || len != sizeof(Key128)) {
       return false;
     }
+
     std::memcpy(out, data, sizeof(Key128));
+
     return true;
   }
 
@@ -69,14 +71,17 @@ struct alignas(16) Key128 {
   std::string ToString() const {
     static constexpr char kHex[] = "0123456789ABCDEF";
     std::string out(32, '0');
+
     for (int i = 0; i < 16; ++i) {
       uint8_t byte = static_cast<uint8_t>(hi >> (60 - i * 4)) & 0xF;
       out[i] = kHex[byte];
     }
+
     for (int i = 0; i < 16; ++i) {
       uint8_t byte = static_cast<uint8_t>(lo >> (60 - i * 4)) & 0xF;
       out[16 + i] = kHex[byte];
     }
+
     return out;
   }
 };

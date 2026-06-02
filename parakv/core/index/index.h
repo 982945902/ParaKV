@@ -125,6 +125,9 @@ class Index : public std::enable_shared_from_this<Index<KeyT, Hash, Eq>> {
   // Read value for |key| into |value_out|.  |value_size| must match config.
   Status Get(const KeyT& key, void* value_out, size_t value_size);
 
+  // Check if |key| is present in the index.
+  bool Contains(const KeyT& key) const;
+
   // Remove |key| from index and free its slot in the owning segment.
   Status Delete(const KeyT& key);
 
