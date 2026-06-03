@@ -83,12 +83,31 @@ bool EnsureDir(const std::string& dir) {
   return true;
 }
 
+const char* SegmentStateName(segment::SegmentState s) {
+  switch (s) {
+    case segment::SegmentState::IDLE:
+      return "IDLE";
+    case segment::SegmentState::APPENDING:
+      return "APPENDING";
+    case segment::SegmentState::FULL:
+      return "FULL";
+  }
+  return "UNKNOWN";
+}
+
 }  // namespace
 
 IndexKVCacheStorageBackend::IndexKVCacheStorageBackend(Options opts)
-    : options_(std::move(opts)) {}
+    : options_(std::move(opts)) {
+  BackendCode code = CreateContext();
+  if (code != BackendCode::kOk) {
+    LOG(ERROR) << "IndexKVCacheStorageBackend: CreateContext failed, code="
+               << static_cast<int>(code) << " namespace='"
+               << options_.namespace_name << "'";
+  }
+}
 
-IndexKVCacheStorageBackend::~IndexKVCacheStorageBackend() = default;
+IndexKVCacheStorageBackend::~IndexKVCacheStorageBackend() { StopStatsThread(); }
 
 BackendCode IndexKVCacheStorageBackend::EnsureValidOptions() const {
   if (options_.slot_value_size <= kHeaderBytes) {
@@ -182,32 +201,22 @@ BackendCode IndexKVCacheStorageBackend::ToBackendCode(parakv::Status s) const {
   }
 }
 
-std::shared_ptr<IndexKVCacheStorageBackend::Context>
-IndexKVCacheStorageBackend::GetOrCreateContext(BackendCode* code,
-                                               std::string* message) {
+BackendCode IndexKVCacheStorageBackend::CreateContext() {
   std::lock_guard<std::mutex> lock(mu_);
   if (context_) {
-    return context_;
+    return BackendCode::kOk;
   }
 
-  if (EnsureValidOptions() != BackendCode::kOk) {
-    if (code) {
-      *code = BackendCode::kInvalidArgument;
-    }
-    if (message) {
-      *message = "invalid index backend options";
-    }
-    return nullptr;
+  BackendCode valid = EnsureValidOptions();
+  if (valid != BackendCode::kOk) {
+    LOG(ERROR) << "CreateContext: invalid options";
+    return valid;
   }
 
   if (!EnsureDir(options_.root_dir)) {
-    if (code) {
-      *code = BackendCode::kIOError;
-    }
-    if (message) {
-      *message = "failed to create backend directory";
-    }
-    return nullptr;
+    LOG(ERROR) << "CreateContext: failed to create directory "
+               << options_.root_dir;
+    return BackendCode::kIOError;
   }
 
   segment::SegmentConfig seg_cfg;
@@ -225,28 +234,18 @@ IndexKVCacheStorageBackend::GetOrCreateContext(BackendCode* code,
         std::make_shared<segment::SegmentFile>(i, seg_cfg, seg_path.str());
     parakv::Status s = seg->Open();
     if (s != parakv::Status::kOk) {
-      if (code) {
-        *code = ToBackendCode(s);
-      }
-      if (message) {
-        *message = "failed to open segment file";
-      }
-      return nullptr;
+      LOG(ERROR) << "CreateContext: failed to open segment file "
+                 << seg_path.str();
+      return ToBackendCode(s);
     }
     s = mgr->AddSegment(seg);
     if (s != parakv::Status::kOk) {
-      if (code) {
-        *code = ToBackendCode(s);
-      }
-      if (message) {
-        *message = "failed to add segment";
-      }
-      return nullptr;
+      LOG(ERROR) << "CreateContext: failed to add segment " << i;
+      return ToBackendCode(s);
     }
     opened_segments.push_back(seg);
   }
 
-  // Restore segment manager state (full-order, etc.) from a previous run.
   const std::string state_path = options_.root_dir + "/segment_manager.state";
   parakv::Status ls = mgr->LoadState(state_path);
   if (ls != parakv::Status::kOk) {
@@ -265,13 +264,8 @@ IndexKVCacheStorageBackend::GetOrCreateContext(BackendCode* code,
   auto idx = std::make_shared<index::Index128>(idx_opts);
   parakv::Status s = idx->Open();
   if (s != parakv::Status::kOk) {
-    if (code) {
-      *code = ToBackendCode(s);
-    }
-    if (message) {
-      *message = "failed to open index";
-    }
-    return nullptr;
+    LOG(ERROR) << "CreateContext: failed to open index";
+    return ToBackendCode(s);
   }
   idx->AttachToSegmentManager();
 
@@ -280,10 +274,18 @@ IndexKVCacheStorageBackend::GetOrCreateContext(BackendCode* code,
   ctx->index = idx;
   ctx->segments = std::move(opened_segments);
   context_ = ctx;
-  if (code) {
-    *code = BackendCode::kOk;
-  }
-  return ctx;
+
+  LOG(INFO) << "CreateContext: namespace='" << options_.namespace_name
+            << "' initialized successfully";
+  StartStatsThread();
+
+  return BackendCode::kOk;
+}
+
+std::shared_ptr<IndexKVCacheStorageBackend::Context>
+IndexKVCacheStorageBackend::GetContext() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return context_;
 }
 
 WriteResult IndexKVCacheStorageBackend::Put(const std::string& key,
@@ -296,11 +298,9 @@ WriteResult IndexKVCacheStorageBackend::Put(const std::string& key,
             "key must be exactly 16 bytes (Key128)"};
   }
 
-  BackendCode create_code = BackendCode::kOk;
-  std::string create_msg;
-  auto ctx = GetOrCreateContext(&create_code, &create_msg);
+  auto ctx = GetContext();
   if (!ctx) {
-    return {create_code, create_msg};
+    return {BackendCode::kUnavailable, "context not initialized"};
   }
 
   if (!opts.overwrite) {
@@ -342,11 +342,9 @@ ReadResult IndexKVCacheStorageBackend::Get(const std::string& key,
   LOG(INFO) << "IndexKVCacheStorageBackend::Get: namespace='"
             << options_.namespace_name << "', key='" << k.ToString() << "'";
 
-  BackendCode create_code = BackendCode::kOk;
-  std::string create_msg;
-  auto ctx = GetOrCreateContext(&create_code, &create_msg);
+  auto ctx = GetContext();
   if (!ctx) {
-    return {create_code, create_msg, {}, {}, 0};
+    return {BackendCode::kUnavailable, "context not initialized", {}, {}, 0};
   }
 
   std::vector<uint8_t> payload(options_.slot_value_size, 0);
@@ -384,11 +382,9 @@ WriteResult IndexKVCacheStorageBackend::Delete(const std::string& key) {
             "key must be exactly 16 bytes (Key128)"};
   }
 
-  BackendCode create_code = BackendCode::kOk;
-  std::string create_msg;
-  auto ctx = GetOrCreateContext(&create_code, &create_msg);
+  auto ctx = GetContext();
   if (!ctx) {
-    return {create_code, create_msg};
+    return {BackendCode::kUnavailable, "context not initialized"};
   }
 
   parakv::Status s = ctx->index->Delete(k);
@@ -401,6 +397,8 @@ WriteResult IndexKVCacheStorageBackend::Delete(const std::string& key) {
 }
 
 void IndexKVCacheStorageBackend::Close() {
+  StopStatsThread();
+
   std::shared_ptr<Context> ctx;
   {
     std::lock_guard<std::mutex> lock(mu_);
@@ -431,6 +429,73 @@ void IndexKVCacheStorageBackend::Close() {
   }
 
   (void)ctx->index->Close();
+}
+
+void IndexKVCacheStorageBackend::StartStatsThread() {
+  if (options_.stats_interval_sec == 0) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(stats_mu_);
+  if (stats_thread_.joinable()) {
+    return;
+  }
+  stats_stop_ = false;
+  stats_thread_ = std::thread(&IndexKVCacheStorageBackend::StatsLoop, this);
+  LOG(INFO) << "StatsThread started for namespace='" << options_.namespace_name
+            << "' interval=" << options_.stats_interval_sec << "s";
+}
+
+void IndexKVCacheStorageBackend::StopStatsThread() {
+  {
+    std::lock_guard<std::mutex> lock(stats_mu_);
+    if (!stats_thread_.joinable()) {
+      return;
+    }
+    stats_stop_ = true;
+    stats_cv_.notify_all();
+  }
+  stats_thread_.join();
+  LOG(INFO) << "StatsThread stopped for namespace='" << options_.namespace_name
+            << "'";
+}
+
+void IndexKVCacheStorageBackend::StatsLoop() {
+  while (true) {
+    {
+      std::unique_lock<std::mutex> lock(stats_mu_);
+      stats_cv_.wait_for(lock,
+                         std::chrono::seconds(options_.stats_interval_sec),
+                         [this] { return stats_stop_; });
+      if (stats_stop_) {
+        break;
+      }
+    }
+
+    std::shared_ptr<Context> ctx;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      ctx = context_;
+    }
+    if (!ctx) {
+      continue;
+    }
+
+    auto* mgr = ctx->segment_manager.get();
+    LOG(INFO) << "[Stats] namespace='" << options_.namespace_name
+              << "' total_segments=" << mgr->GetTotalSegments()
+              << " idle=" << mgr->GetIdleSegments()
+              << " full=" << mgr->GetFullSegments();
+
+    for (const auto& seg : ctx->segments) {
+      LOG(INFO) << "[Stats] seg_id=" << seg->GetSegmentId()
+                << " state=" << SegmentStateName(seg->GetState())
+                << " total_slots=" << seg->GetTotalSlots()
+                << " used=" << seg->GetUsedSlots()
+                << " free=" << seg->GetFreeSlots()
+                << " deleted=" << seg->GetDeletedSlots()
+                << " deleted_ratio=" << seg->GetDeletedRatio();
+    }
+  }
 }
 
 }  // namespace kvcache_storage

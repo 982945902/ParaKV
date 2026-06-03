@@ -15,10 +15,13 @@ limitations under the License.
 
 #pragma once
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "parakv/core/index/index.h"
@@ -41,6 +44,8 @@ class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
     uint32_t slot_value_size = 4096;
     uint32_t segment_count = 1;
     uint64_t wal_checkpoint_bytes = 1ULL << 30;
+    // Background stats logging interval in seconds. 0 disables the thread.
+    uint32_t stats_interval_sec = 10;
   };
 
   explicit IndexKVCacheStorageBackend(Options opts);
@@ -75,12 +80,21 @@ class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
                             std::string* err) const;
   BackendCode ToBackendCode(parakv::Status s) const;
 
-  std::shared_ptr<Context> GetOrCreateContext(BackendCode* code,
-                                              std::string* message);
+  BackendCode CreateContext();
+  std::shared_ptr<Context> GetContext() const;
+
+  void StartStatsThread();
+  void StopStatsThread();
+  void StatsLoop();
 
   Options options_;
   mutable std::mutex mu_;
   std::shared_ptr<Context> context_;
+
+  std::thread stats_thread_;
+  std::mutex stats_mu_;
+  std::condition_variable stats_cv_;
+  bool stats_stop_ = false;
 };
 
 }  // namespace kvcache_storage
