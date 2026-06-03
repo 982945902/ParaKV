@@ -76,6 +76,9 @@ class KVCacheStorageBackend {
   // leave `value`/`metadata` empty.
   virtual ReadResult Get(const std::string& key, const ReadOptions& opts) = 0;
 
+  // Delete one entry by key.  Returns kNotFound if the key does not exist.
+  virtual WriteResult Delete(const std::string& key) = 0;
+
   // Flush in-memory state to durable storage (snapshot + WAL rotation, etc.)
   // and stop accepting further writes. Must be safe to call multiple times
   // and from main()'s shutdown path. Default implementation is a no-op so

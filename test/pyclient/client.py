@@ -112,6 +112,16 @@ class Client:
         )
         return self.stub.BatchRead(request)
 
+    def batch_delete(self, keys: List[bytes]):
+        for k in keys:
+            if not isinstance(k, (bytes, bytearray)) or len(k) != KEY_BYTES:
+                raise ValueError(f"key must be {KEY_BYTES} bytes, got len={len(k)}")
+        request = pb.BatchDeleteRequest(
+            namespace=self.namespace,
+            keys=list(keys),
+        )
+        return self.stub.BatchDelete(request)
+
 
 if __name__ == "__main__":
     client = Client("localhost", 9200, "test")

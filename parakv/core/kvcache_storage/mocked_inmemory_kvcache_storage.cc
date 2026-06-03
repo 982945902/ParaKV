@@ -99,6 +99,16 @@ ReadResult MockedInMemoryKVCacheStorage::Get(const std::string& key,
   return r;
 }
 
+WriteResult MockedInMemoryKVCacheStorage::Delete(const std::string& key) {
+  std::lock_guard<std::mutex> lock(mu_);
+  auto it = store_.find(key);
+  if (it == store_.end()) {
+    return {BackendCode::kNotFound, "key not found"};
+  }
+  store_.erase(it);
+  return {BackendCode::kOk, {}};
+}
+
 size_t MockedInMemoryKVCacheStorage::size() const {
   std::lock_guard<std::mutex> lock(mu_);
   return store_.size();

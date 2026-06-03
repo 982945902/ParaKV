@@ -45,6 +45,8 @@ class MockedInMemoryKVCacheStorage final : public KVCacheStorageBackend {
 
   ReadResult Get(const std::string& key, const ReadOptions& opts) override;
 
+  WriteResult Delete(const std::string& key) override;
+
   size_t size() const;
 
  private:

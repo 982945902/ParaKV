@@ -28,6 +28,9 @@ namespace service {
 
 namespace {
 
+using parakv::proto::BatchDeleteRequest;
+using parakv::proto::BatchDeleteResponse;
+using parakv::proto::BatchDeleteResult;
 using parakv::proto::BatchReadRequest;
 using parakv::proto::BatchReadResponse;
 using parakv::proto::BatchReadResult;
@@ -76,6 +79,13 @@ void FillItemError(BatchWriteResult* r, const std::string& key, StatusCode code,
 
 void FillItemError(BatchReadResult* r, const std::string& key, StatusCode code,
                    const std::string& msg) {
+  r->set_key(key);
+  r->set_code(code);
+  r->set_message(msg);
+}
+
+void FillItemError(BatchDeleteResult* r, const std::string& key,
+                   StatusCode code, const std::string& msg) {
   r->set_key(key);
   r->set_code(code);
   r->set_message(msg);
@@ -245,6 +255,60 @@ void KVCacheStorageServiceImpl::BatchRead(
 
   response->set_hit_count(hit);
   response->set_miss_count(miss);
+  response->set_code(StatusCode::OK);
+}
+
+void KVCacheStorageServiceImpl::BatchDelete(
+    google::protobuf::RpcController* cntl_base,
+    const BatchDeleteRequest* request, BatchDeleteResponse* response,
+    google::protobuf::Closure* done) {
+  brpc::ClosureGuard done_guard(done);
+  auto* cntl = static_cast<brpc::Controller*>(cntl_base);
+  (void)cntl;
+
+  const int n = request->keys_size();
+  VLOG(1) << "BatchDelete request_id=" << request->request_id()
+          << " ns=" << request->namespace_() << " keys=" << n;
+
+  if (n == 0) {
+    response->set_code(StatusCode::INVALID_ARGUMENT);
+    response->set_message("empty batch");
+    return;
+  }
+  if (static_cast<uint32_t>(n) > options_.max_batch_size) {
+    response->set_code(StatusCode::INVALID_ARGUMENT);
+    response->set_message("batch too large");
+    return;
+  }
+
+  response->mutable_results()->Reserve(n);
+
+  uint32_t success = 0;
+  uint32_t failure = 0;
+
+  for (const std::string& key : request->keys()) {
+    auto* out = response->add_results();
+
+    if (key.empty()) {
+      FillItemError(out, key, StatusCode::INVALID_ARGUMENT, "empty key");
+      ++failure;
+      continue;
+    }
+
+    WriteResult r = manager_->Delete(request->namespace_(), key);
+    out->set_key(key);
+    out->set_code(ToProtoCode(r.code));
+    if (!r.message.empty()) out->set_message(r.message);
+
+    if (r.code == BackendCode::kOk) {
+      ++success;
+    } else {
+      ++failure;
+    }
+  }
+
+  response->set_success_count(success);
+  response->set_failure_count(failure);
   response->set_code(StatusCode::OK);
 }
 

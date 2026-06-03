@@ -51,6 +51,9 @@ class BackendNamespaceManager {
   ReadResult Get(const std::string& ns, const std::string& key,
                  const ReadOptions& opts);
 
+  // Delete one entry.
+  WriteResult Delete(const std::string& ns, const std::string& key);
+
   void Close();
 
   // Replace characters unsafe for filesystem paths with '_'.

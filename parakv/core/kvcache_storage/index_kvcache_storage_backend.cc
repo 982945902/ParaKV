@@ -377,6 +377,29 @@ ReadResult IndexKVCacheStorageBackend::Get(const std::string& key,
   return r;
 }
 
+WriteResult IndexKVCacheStorageBackend::Delete(const std::string& key) {
+  index::Key128 k{};
+  if (!index::Key128::FromString(key, &k)) {
+    return {BackendCode::kInvalidArgument,
+            "key must be exactly 16 bytes (Key128)"};
+  }
+
+  BackendCode create_code = BackendCode::kOk;
+  std::string create_msg;
+  auto ctx = GetOrCreateContext(&create_code, &create_msg);
+  if (!ctx) {
+    return {create_code, create_msg};
+  }
+
+  parakv::Status s = ctx->index->Delete(k);
+  if (s != parakv::Status::kOk) {
+    return {ToBackendCode(s), s == parakv::Status::kNotFound
+                                  ? "key not found"
+                                  : "index delete failed"};
+  }
+  return {BackendCode::kOk, {}};
+}
+
 void IndexKVCacheStorageBackend::Close() {
   std::shared_ptr<Context> ctx;
   {

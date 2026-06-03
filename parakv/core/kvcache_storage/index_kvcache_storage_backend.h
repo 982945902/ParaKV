@@ -52,6 +52,8 @@ class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
 
   ReadResult Get(const std::string& key, const ReadOptions& opts) override;
 
+  WriteResult Delete(const std::string& key) override;
+
   void Close() override;
 
  private:

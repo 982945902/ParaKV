@@ -108,6 +108,16 @@ ReadResult BackendNamespaceManager::Get(const std::string& ns,
   return backend->Get(key, opts);
 }
 
+WriteResult BackendNamespaceManager::Delete(const std::string& ns,
+                                            const std::string& key) {
+  auto backend = GetBackend(ns);
+  if (!backend) {
+    return {BackendCode::kInvalidArgument,
+            "namespace '" + ns + "' is not registered"};
+  }
+  return backend->Delete(key);
+}
+
 void BackendNamespaceManager::Close() {
   std::unordered_map<std::string, std::shared_ptr<KVCacheStorageBackend>> taken;
   {

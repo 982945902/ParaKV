@@ -60,6 +60,11 @@ class KVCacheStorageServiceImpl final
                  parakv::proto::BatchReadResponse* response,
                  google::protobuf::Closure* done) override;
 
+  void BatchDelete(google::protobuf::RpcController* cntl_base,
+                   const parakv::proto::BatchDeleteRequest* request,
+                   parakv::proto::BatchDeleteResponse* response,
+                   google::protobuf::Closure* done) override;
+
  private:
   std::shared_ptr<kvcache_storage::BackendNamespaceManager> manager_;
   ServiceOptions options_;

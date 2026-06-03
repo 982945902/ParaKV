@@ -171,13 +171,46 @@ message BatchReadResponse {
 }
 
 // -----------------------------------------------------------------------------
+// BatchDelete
+// -----------------------------------------------------------------------------
+
+message BatchDeleteRequest {
+  string   request_id = 1;
+  string   namespace  = 2;
+
+  // Keys to delete. Missing keys are reported per-item with NOT_FOUND.
+  repeated bytes keys = 3;
+}
+
+// Per-item delete result. Aligned with BatchDeleteRequest.keys by `key`.
+message BatchDeleteResult {
+  bytes      key     = 1;
+  StatusCode code    = 2;
+  string     message = 3;
+}
+
+message BatchDeleteResponse {
+  StatusCode code    = 1;
+  string     message = 2;
+
+  // Per-key results, order-aligned with BatchDeleteRequest.keys.
+  repeated BatchDeleteResult results = 3;
+
+  uint32     success_count = 4;
+  uint32     failure_count = 5;
+}
+
+// -----------------------------------------------------------------------------
 // Service
 // -----------------------------------------------------------------------------
 
 service KVCacheStorageService {
   // Batch write a set of KVCache blocks.
-  rpc BatchWrite(BatchWriteRequest) returns (BatchWriteResponse);
+  rpc BatchWrite(BatchWriteRequest)   returns (BatchWriteResponse);
 
   // Batch read a set of KVCache blocks by key.
-  rpc BatchRead(BatchReadRequest)   returns (BatchReadResponse);
+  rpc BatchRead(BatchReadRequest)     returns (BatchReadResponse);
+
+  // Batch delete a set of KVCache blocks by key.
+  rpc BatchDelete(BatchDeleteRequest) returns (BatchDeleteResponse);
 }
