@@ -19,6 +19,8 @@ limitations under the License.
 #include <cassert>
 #include <cstring>
 
+#include "glog/logging.h"
+
 namespace parakv {
 namespace segment {
 
@@ -85,19 +87,34 @@ uint32_t SegmentBase::GetDeletedSlots() const {
   return deleted_slots_;
 }
 
-double SegmentBase::GetDeletedRatio() const {
+float SegmentBase::GetDeletedRatio() const {
   std::lock_guard<std::mutex> lock(mutex_);
   if (append_cursor_ == 0) {
     return 0.0;
   }
-  return static_cast<double>(deleted_slots_) / append_cursor_;
+  return static_cast<float>(deleted_slots_) / append_cursor_;
 }
 
 bool SegmentBase::NeedsCompaction() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return state_ == SegmentState::FULL && append_cursor_ > 0 &&
-         static_cast<double>(deleted_slots_) / append_cursor_ >=
-             config_.compaction_threshold;
+
+  const float deleted_ratio =
+      append_cursor_ > 0 ? static_cast<float>(deleted_slots_) / append_cursor_
+                         : 0.0f;
+  const bool needs = (state_ == SegmentState::FULL) && (append_cursor_ > 0) &&
+                     (deleted_ratio >= config_.compaction_threshold);
+
+  if (state_ == SegmentState::FULL) {
+    LOG(INFO) << "SegmentBase::NeedsCompaction: segment " << segment_id_
+              << " is full, deleted_ratio=" << deleted_ratio
+              << " threshold=" << config_.compaction_threshold
+              << " append_cursor=" << append_cursor_
+              << " deleted_slots=" << deleted_slots_
+              << " used_slots=" << used_slots_
+              << " total_slots=" << total_slots_ << " needs=" << needs;
+  }
+
+  return needs;
 }
 
 uint64_t SegmentBase::GetSlotOffset(uint32_t slot_id) const {

@@ -4,3 +4,5 @@
 -v=1
 -backend=kvcache_index128
 -segment_value_size=4104
+-segment_size=1048576
+-segment_count=10

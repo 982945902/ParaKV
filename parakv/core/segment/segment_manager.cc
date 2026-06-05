@@ -124,6 +124,8 @@ std::shared_ptr<SegmentBase> SegmentManager::GetActiveSegment() {
     auto seg = segments_[id];
     if (seg->GetFreeSlots() > 0) {
       return seg;
+    } else {
+      MarkSegmentFullInternal(id);
     }
   }
 
@@ -139,6 +141,30 @@ std::shared_ptr<SegmentBase> SegmentManager::GetSegment(uint32_t segment_id) {
   }
 
   return it->second;
+}
+
+Status SegmentManager::MarkSegmentFull(uint32_t segment_id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  return MarkSegmentFullInternal(segment_id);
+}
+
+Status SegmentManager::MarkSegmentFullInternal(uint32_t segment_id) {
+  if (segments_.find(segment_id) == segments_.end()) {
+    return Status::kNotFound;
+  }
+
+  if (full_set_.count(segment_id) != 0) {
+    return Status::kOk;
+  }
+
+  appending_set_.erase(segment_id);
+  idle_set_.erase(segment_id);
+  full_set_.insert(segment_id);
+  full_order_.push_back(segment_id);
+
+  LOG(INFO) << "SegmentManager::MarkSegmentFull: segment_id=" << segment_id;
+  return Status::kOk;
 }
 
 Status SegmentManager::ReleaseSegment(uint32_t segment_id) {
@@ -366,20 +392,33 @@ Status SegmentManager::LoadState(const std::string& path) {
 // ---------------------------------------------------------------------------
 
 Status SegmentManager::RunCompaction() {
-  std::vector<uint32_t> candidates;
+  LOG(INFO) << "SegmentManager::RunCompaction: starting compaction";
 
+  std::vector<uint32_t> candidates;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    LOG(INFO) << "SegmentManager::RunCompaction: full_set_=" << full_set_.size()
+              << " appending_set_=" << appending_set_.size()
+              << " idle_set_=" << idle_set_.size();
     for (const uint32_t id : full_set_) {
+      LOG(INFO) << "==== SegmentManager::RunCompaction: segment " << id
+                << " is full, deleted ratio: "
+                << segments_[id]->GetDeletedRatio();
       if (hot_segments_.count(id) != 0) {
         continue;
       }
       auto seg = segments_[id];
       if (seg->NeedsCompaction()) {
+        LOG(INFO) << "SegmentManager::RunCompaction: segment " << id
+                  << " needs compaction, deleted ratio: "
+                  << seg->GetDeletedRatio();
         candidates.push_back(id);
       }
     }
   }
+
+  LOG(INFO) << "SegmentManager::RunCompaction: found " << candidates.size()
+            << " candidates for compaction";
 
   for (const uint32_t src_id : candidates) {
     auto active = GetActiveSegment();
@@ -397,6 +436,7 @@ Status SegmentManager::RunCompaction() {
       src = it->second;
     }
 
+    LOG(INFO) << "==== SegmentManager::RunCompaction: src_id=" << src_id;
     const Status s = src->Compact(
         active.get(), [this](void* key, uint32_t old_seg, uint32_t old_slot,
                              uint32_t new_seg, uint32_t new_slot) {

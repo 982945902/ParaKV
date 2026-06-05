@@ -21,13 +21,13 @@ limitations under the License.
 #include <chrono>
 #include <functional>
 #include <list>
-#include <map>
 #include <mutex>
-#include <unordered_map>
 #include <vector>
 
 #include "parakv/core/cache/allow.h"
 #include "parakv/core/cache/lock.h"
+#include "parallel_hashmap/btree.h"
+#include "parallel_hashmap/phmap.h"
 
 namespace parakv {
 /**
@@ -43,22 +43,23 @@ namespace parakv {
  * threads safely. To remove locks/synchronization use NO when creating the
  * cache.
  *
- * @tparam key_type The key type.  Must support std::hash() and operator<()
+ * @tparam key_type The key type.  Must support Hash and KeyEqual.
  * @tparam value_type The value type.  This is returned by copy on a find, so if
  * your data structure value is large it is advisable to store in a shared ptr.
  * @tparam thread_safe_type By default this cache is thread safe, can be
  * disabled for caches specific to a single thread.
+ * @tparam Hash Hash function for key_type.
+ * @tparam KeyEqual Equality comparator for key_type.
  */
 template <typename key_type, typename value_type,
-          thread_safe thread_safe_type = thread_safe::yes>
+          thread_safe thread_safe_type = thread_safe::yes,
+          typename Hash = phmap::priv::hash_default_hash<key_type>,
+          typename KeyEqual = phmap::priv::hash_default_eq<key_type>>
 class lfuda_cache {
  private:
   struct element;
 
   using age_iterator = typename std::list<element>::iterator;
-  using keyed_iterator =
-      typename std::unordered_map<key_type, age_iterator>::iterator;
-  using lfu_iterator = typename std::multimap<size_t, age_iterator>::iterator;
 
  public:
   using eviction_callback = std::function<void(const key_type&, value_type&)>;
@@ -297,15 +298,21 @@ class lfuda_cache {
 
  private:
   struct element {
-    /// The iterator into the keyed data structure.
-    keyed_iterator m_keyed_position;
-    /// The iterator into the lfu data structure.
-    lfu_iterator m_lfu_position;
-    /// The dynamic age timestamp.
+    key_type m_key;
+    size_t m_use_count{0};
     std::chrono::steady_clock::time_point m_dynamic_age;
-    /// The element's value.
     value_type m_value;
   };
+
+  void erase_lfu_entry(size_t use_count, age_iterator target) {
+    auto [lo, hi] = m_lfu_list.equal_range(use_count);
+    for (auto it = lo; it != hi; ++it) {
+      if (it->second == target) {
+        m_lfu_list.erase(it);
+        return;
+      }
+    }
+  }
 
   auto do_insert_update(const key_type& key, value_type&& value,
                         std::chrono::steady_clock::time_point now, allow a)
@@ -313,7 +320,7 @@ class lfuda_cache {
     auto keyed_position = m_keyed_elements.find(key);
     if (keyed_position != m_keyed_elements.end()) {
       if (update_allowed(a)) {
-        do_update(keyed_position, std::move(value), now);
+        do_update(keyed_position->second, std::move(value), now);
         return true;
       }
     } else {
@@ -334,12 +341,12 @@ class lfuda_cache {
 
     element& e = *m_open_list_end;
 
-    auto keyed_position = m_keyed_elements.emplace(key, m_open_list_end).first;
-    auto lfu_position = m_lfu_list.emplace(1, m_open_list_end);
+    m_keyed_elements.emplace(key, m_open_list_end);
+    m_lfu_list.emplace(1, m_open_list_end);
 
+    e.m_key = key;
+    e.m_use_count = 1;
     e.m_value = std::move(value);
-    e.m_keyed_position = keyed_position;
-    e.m_lfu_position = lfu_position;
     e.m_dynamic_age = now;
 
     ++m_open_list_end;
@@ -347,25 +354,24 @@ class lfuda_cache {
     ++m_used_size;
   }
 
-  auto do_update(keyed_iterator keyed_position, value_type&& value,
+  auto do_update(age_iterator pos, value_type&& value,
                  std::chrono::steady_clock::time_point now) -> void {
-    element& e = *keyed_position->second;
+    element& e = *pos;
     e.m_value = std::move(value);
 
-    do_access(e, now);
+    do_access(e, pos, now);
   }
 
-  auto do_erase(age_iterator age_iterator) -> void {
-    element& e = *age_iterator;
+  auto do_erase(age_iterator age_it) -> void {
+    element& e = *age_it;
 
-    if (age_iterator != std::prev(m_open_list_end)) {
-      m_dynamic_age_list.splice(m_open_list_end, m_dynamic_age_list,
-                                age_iterator);
+    if (age_it != std::prev(m_open_list_end)) {
+      m_dynamic_age_list.splice(m_open_list_end, m_dynamic_age_list, age_it);
     }
     --m_open_list_end;
 
-    m_keyed_elements.erase(e.m_keyed_position);
-    m_lfu_list.erase(e.m_lfu_position);
+    m_keyed_elements.erase(e.m_key);
+    erase_lfu_entry(e.m_use_count, age_it);
 
     --m_used_size;
   }
@@ -375,9 +381,10 @@ class lfuda_cache {
       -> std::optional<value_type> {
     auto keyed_position = m_keyed_elements.find(key);
     if (keyed_position != m_keyed_elements.end()) {
-      element& e = *keyed_position->second;
+      age_iterator age_it = keyed_position->second;
+      element& e = *age_it;
       if (!peek) {
-        do_access(e, now);
+        do_access(e, age_it, now);
       }
       return {e.m_value};
     }
@@ -390,30 +397,26 @@ class lfuda_cache {
       -> std::optional<std::pair<value_type, size_t>> {
     auto keyed_position = m_keyed_elements.find(key);
     if (keyed_position != m_keyed_elements.end()) {
-      element& e = *keyed_position->second;
+      age_iterator age_it = keyed_position->second;
+      element& e = *age_it;
       if (!peek) {
-        do_access(e, now);
+        do_access(e, age_it, now);
       }
-      return {std::make_pair(e.m_value, e.m_lfu_position->first)};
+      return {std::make_pair(e.m_value, e.m_use_count)};
     }
 
     return {};
   }
 
-  auto do_access(element& e, std::chrono::steady_clock::time_point now)
-      -> void {
-    // Update lfu position.
-    auto use_count = e.m_lfu_position->first;
-    m_lfu_list.erase(e.m_lfu_position);
-    e.m_lfu_position =
-        m_lfu_list.emplace(use_count + 1, e.m_keyed_position->second);
+  auto do_access(element& e, age_iterator age_it,
+                 std::chrono::steady_clock::time_point now) -> void {
+    erase_lfu_entry(e.m_use_count, age_it);
+    ++e.m_use_count;
+    m_lfu_list.emplace(e.m_use_count, age_it);
 
-    // Update dynamic aging position.
     auto last_aged_item = std::prev(m_open_list_end);
-    // swap to the end of the aged list and update its time.
-    if (e.m_keyed_position->second != last_aged_item) {
-      m_dynamic_age_list.splice(last_aged_item, m_dynamic_age_list,
-                                e.m_keyed_position->second);
+    if (age_it != last_aged_item) {
+      m_dynamic_age_list.splice(last_aged_item, m_dynamic_age_list, age_it);
     }
     e.m_dynamic_age = now;
   }
@@ -425,7 +428,7 @@ class lfuda_cache {
       auto victim = m_lfu_list.begin()->second;
       if (m_on_evict) {
         element& e = *victim;
-        m_on_evict(e.m_keyed_position->first, e.m_value);
+        m_on_evict(e.m_key, e.m_value);
       }
       do_erase(victim);
     }
@@ -434,33 +437,22 @@ class lfuda_cache {
   auto do_dynamic_age(std::chrono::steady_clock::time_point now) -> size_t {
     size_t aged{0};
 
-    // For all items in the DA list that are old enough and in use, DA them!
     auto da_start = m_dynamic_age_list.begin();
-    auto da_last = m_open_list_end;  // need the item previous to the end to
-                                     // splice properly
+    auto da_last = m_open_list_end;
     while (da_start != m_open_list_end &&
            (*da_start).m_dynamic_age + m_dynamic_age_tick < now) {
-      // swap to after the last item (if it isn't the last item..)
       if (da_start != da_last) {
         m_dynamic_age_list.splice(da_last, m_dynamic_age_list, da_start);
       }
 
-      // Update its dynamic age time to now.
       element& e = *da_start;
       e.m_dynamic_age = now;
-      // Now *= ratio its use count to actually age it.  This requires
-      // deleting from and re-inserting into the lfu data structure.
-      size_t use_count = e.m_lfu_position->first;
-      m_lfu_list.erase(e.m_lfu_position);
-      use_count = (size_t)(use_count * m_dynamic_age_ratio);
-      e.m_lfu_position = m_lfu_list.emplace(use_count, da_start);
 
-      // The last item is now this item!  This will maintain the insertion
-      // order.
+      erase_lfu_entry(e.m_use_count, da_start);
+      e.m_use_count = (size_t)(e.m_use_count * m_dynamic_age_ratio);
+      m_lfu_list.emplace(e.m_use_count, da_start);
+
       da_last = da_start;
-
-      // Keep pruning from the beginning until we are m_open_list_end or not
-      // aged enough.
       da_start = m_dynamic_age_list.begin();
       ++aged;
     }
@@ -482,11 +474,13 @@ class lfuda_cache {
   /// The ratio amount of 'uses' to remove when an element dynamically ages.
   float m_dynamic_age_ratio{0.5f};
 
-  /// The keyed lookup data structure, the value is the index into 'm_elements'.
-  std::unordered_map<key_type, age_iterator> m_keyed_elements;
+  /// The keyed lookup data structure, maps key -> age_iterator.
+  /// Uses phmap::parallel_flat_hash_map without internal mutex (NullMutex).
+  phmap::parallel_flat_hash_map<key_type, age_iterator, Hash, KeyEqual>
+      m_keyed_elements;
   /// The lfu sorted map, the key is the number of times the element has been
-  /// used, the value is the index into 'm_elements'.
-  std::multimap<size_t, age_iterator> m_lfu_list;
+  /// used, the value is the age_iterator.
+  phmap::btree_multimap<size_t, age_iterator> m_lfu_list;
   /// The dynamic age list, this also contains a partition on un-used
   /// 'm_elements'.
   std::list<element> m_dynamic_age_list;

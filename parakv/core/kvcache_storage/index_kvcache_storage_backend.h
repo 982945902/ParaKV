@@ -68,7 +68,8 @@ class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
   void Close() override;
 
  private:
-  using LFUCache = lfuda_cache<index::Key128, bool, thread_safe::yes>;
+  using LFUCache = lfuda_cache<index::Key128, bool, thread_safe::yes,
+                               index::Key128Hash, index::Key128Eq>;
 
   struct Context {
     std::shared_ptr<segment::SegmentManager> segment_manager;

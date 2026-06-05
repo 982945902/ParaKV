@@ -55,6 +55,10 @@ class SegmentManager {
   // Return segment by id.
   std::shared_ptr<SegmentBase> GetSegment(uint32_t segment_id);
 
+  // Move a segment from APPENDING to FULL.
+  // Called by the index layer when an Insert returns kFull.
+  Status MarkSegmentFull(uint32_t segment_id);
+
   // Release a segment to IDLE pool (after compaction).
   Status ReleaseSegment(uint32_t segment_id);
 
@@ -100,6 +104,8 @@ class SegmentManager {
   std::vector<uint32_t> GetFullSegmentOrder() const;
 
  private:
+  Status MarkSegmentFullInternal(uint32_t segment_id);
+
   std::shared_ptr<SegmentBase> PromoteIdleSegment();
 
   SegmentConfig config_;

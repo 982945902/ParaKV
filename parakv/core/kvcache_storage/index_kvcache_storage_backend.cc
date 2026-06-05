@@ -556,6 +556,8 @@ void IndexKVCacheStorageBackend::StatsLoop() {
                 << " deleted=" << seg->GetDeletedSlots()
                 << " deleted_ratio=" << seg->GetDeletedRatio();
     }
+
+    mgr->RunCompaction();
   }
 }
 

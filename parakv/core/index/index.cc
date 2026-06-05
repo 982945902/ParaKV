@@ -468,8 +468,7 @@ Status Index<KeyT, Hash, Eq>::WriteToSegment(const KeyT& key, const void* value,
   uint32_t slot_id = 0;
   Status s = seg->Insert(&key, value, &slot_id);
   if (s == Status::kFull) {
-    // The active segment filled up between GetActiveSegment() and Insert().
-    // Retry once with a newly-promoted segment.
+    opts_.segment_manager->MarkSegmentFull(seg->GetSegmentId());
     seg = opts_.segment_manager->GetActiveSegment();
     if (seg == nullptr) {
       return Status::kNoSpace;

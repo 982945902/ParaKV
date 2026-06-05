@@ -37,7 +37,7 @@ struct SegmentConfig {
   uint32_t key_size = 8;
   uint32_t value_size = 512;
   uint64_t segment_size = 256ULL * 1024 * 1024;
-  double compaction_threshold = 0.75;
+  float compaction_threshold = 0.75;
   uint64_t bitmap_alignment = 4096;
 };
 
@@ -77,7 +77,7 @@ class SegmentBase {
   uint32_t GetUsedSlots() const;
   uint32_t GetFreeSlots() const;
   uint32_t GetDeletedSlots() const;
-  double GetDeletedRatio() const;
+  float GetDeletedRatio() const;
   bool NeedsCompaction() const;
   uint32_t GetSlotSize() const { return slot_size_; }
 
