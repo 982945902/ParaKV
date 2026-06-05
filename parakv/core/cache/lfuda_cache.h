@@ -19,6 +19,7 @@ limitations under the License.
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <list>
 #include <map>
 #include <mutex>
@@ -60,6 +61,8 @@ class lfuda_cache {
   using lfu_iterator = typename std::multimap<size_t, age_iterator>::iterator;
 
  public:
+  using eviction_callback = std::function<void(const key_type&, value_type&)>;
+
   /**
    * @param capacity The maximum number of key value pairs allowed in the cache.
    * @param dynamic_age_tick The amount of time to pass before dynamically aging
@@ -69,12 +72,16 @@ class lfuda_cache {
    * dynamically age. The default is to halve their use count.
    * @param max_load_factor The load factor for the hash map, generally 1 is a
    * good default.
+   * @param on_evict Optional callback invoked when an item is evicted due to
+   * capacity overflow.
    */
   explicit lfuda_cache(
       size_t capacity,
       std::chrono::milliseconds dynamic_age_tick = std::chrono::minutes{1},
-      float dynamic_age_ratio = 0.5f, float max_load_factor = 1.0f)
-      : m_dynamic_age_tick(dynamic_age_tick),
+      float dynamic_age_ratio = 0.5f, float max_load_factor = 1.0f,
+      eviction_callback on_evict = nullptr)
+      : m_on_evict(std::move(on_evict)),
+        m_dynamic_age_tick(dynamic_age_tick),
         m_dynamic_age_ratio(dynamic_age_ratio),
         m_dynamic_age_list(capacity) {
     m_open_list_end = m_dynamic_age_list.begin();
@@ -415,8 +422,12 @@ class lfuda_cache {
     if (m_used_size > 0) {
       do_dynamic_age(now);
 
-      // Now delete the least frequently used item after dynamically aging.
-      do_erase(m_lfu_list.begin()->second);
+      auto victim = m_lfu_list.begin()->second;
+      if (m_on_evict) {
+        element& e = *victim;
+        m_on_evict(e.m_keyed_position->first, e.m_value);
+      }
+      do_erase(victim);
     }
   }
 
@@ -456,6 +467,9 @@ class lfuda_cache {
 
     return aged;
   }
+
+  /// Optional eviction callback.
+  eviction_callback m_on_evict;
 
   /// Cache lock for all mutations if thread_safe is enabled.
   mutex<thread_safe_type> m_lock;

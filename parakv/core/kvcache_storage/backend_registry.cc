@@ -212,6 +212,8 @@ PARAKV_REGISTER_KVCACHE_BACKEND(
       opts.slot_value_size = FLAGS_segment_value_size;
       opts.segment_count = FLAGS_segment_count;
       opts.wal_checkpoint_bytes = FLAGS_index_wal_checkpoint_bytes;
+      opts.lfu_capacity_ratio = FLAGS_lfu_capacity_ratio;
+      opts.lfu_age_tick_sec = FLAGS_lfu_age_tick_sec;
 
       return std::make_shared<
           ::parakv::kvcache_storage::IndexKVCacheStorageBackend>(opts);

@@ -31,3 +31,7 @@ DECLARE_string(segement_workspace_path);
 
 // Index related flags
 DECLARE_uint32(index_wal_checkpoint_bytes);
+
+// LFU eviction flags
+DECLARE_double(lfu_capacity_ratio);
+DECLARE_uint32(lfu_age_tick_sec);

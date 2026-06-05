@@ -18,6 +18,7 @@ limitations under the License.
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -176,6 +177,13 @@ class Index : public std::enable_shared_from_this<Index<KeyT, Hash, Eq>> {
   // Update the encoded offset for |key| from |old_off| to |new_off| iff the
   // current mapping equals |old_off|.  Used by compaction.
   Status RemapIfEquals(const KeyT& key, uint64_t old_off, uint64_t new_off);
+
+  // ---- Enumeration ---------------------------------------------------------
+
+  // Invoke |callback| for every key currently in the index.  The callback
+  // receives a const reference and must not mutate the index.  Iteration
+  // order is unspecified.  Internally locks each phmap submap in turn.
+  void ForEachKey(const std::function<void(const KeyT&)>& callback) const;
 
   // ---- Stats --------------------------------------------------------------
 

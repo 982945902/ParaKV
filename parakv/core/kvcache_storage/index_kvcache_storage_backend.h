@@ -24,6 +24,7 @@ limitations under the License.
 #include <thread>
 #include <vector>
 
+#include "parakv/core/cache/lfuda_cache.h"
 #include "parakv/core/index/index.h"
 #include "parakv/core/kvcache_storage/kvcache_storage_backend.h"
 #include "parakv/core/segment/segment_manager.h"
@@ -46,6 +47,11 @@ class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
     uint64_t wal_checkpoint_bytes = 1ULL << 30;
     // Background stats logging interval in seconds. 0 disables the thread.
     uint32_t stats_interval_sec = 10;
+    // LFU eviction: capacity = total_segment_slots * lfu_capacity_ratio.
+    // 0 disables LFU eviction entirely.
+    double lfu_capacity_ratio = 0.9;
+    // Dynamic aging interval in seconds for LFU frequency decay.
+    uint32_t lfu_age_tick_sec = 60;
   };
 
   explicit IndexKVCacheStorageBackend(Options opts);
@@ -62,10 +68,13 @@ class IndexKVCacheStorageBackend final : public KVCacheStorageBackend {
   void Close() override;
 
  private:
+  using LFUCache = lfuda_cache<index::Key128, bool, thread_safe::yes>;
+
   struct Context {
     std::shared_ptr<segment::SegmentManager> segment_manager;
     std::shared_ptr<index::Index128> index;
     std::vector<std::shared_ptr<segment::SegmentBase>> segments;
+    std::unique_ptr<LFUCache> lfu;
   };
 
   static constexpr uint32_t kHeaderBytes = 8;  // value_len(4) + metadata_len(4)

@@ -273,6 +273,50 @@ BackendCode IndexKVCacheStorageBackend::CreateContext() {
   ctx->segment_manager = mgr;
   ctx->index = idx;
   ctx->segments = std::move(opened_segments);
+
+  if (options_.lfu_capacity_ratio > 0.0) {
+    uint64_t total_slots = 0;
+    for (const auto& seg : ctx->segments) {
+      total_slots += seg->GetTotalSlots();
+    }
+    size_t lfu_capacity = static_cast<size_t>(static_cast<double>(total_slots) *
+                                              options_.lfu_capacity_ratio);
+    if (lfu_capacity == 0) {
+      lfu_capacity = 1;
+    }
+
+    auto age_tick = std::chrono::seconds(options_.lfu_age_tick_sec);
+
+    // weak_ptr lets the eviction callback reference the index without
+    // preventing Context destruction.
+    std::weak_ptr<index::Index128> weak_idx = idx;
+    auto on_evict = [weak_idx](const index::Key128& key, bool&) {
+      if (auto p = weak_idx.lock()) {
+        parakv::Status ds = p->Delete(key);
+        if (ds != parakv::Status::kOk && ds != parakv::Status::kNotFound) {
+          LOG(WARNING) << "LFU evict: failed to delete key=" << key.ToString()
+                       << " status=" << static_cast<int>(ds);
+        } else {
+          LOG(INFO) << "LFU evict: key=" << key.ToString();
+        }
+      }
+    };
+
+    ctx->lfu = std::make_unique<LFUCache>(lfu_capacity, age_tick, 0.5f, 1.0f,
+                                          std::move(on_evict));
+
+    size_t rebuilt = 0;
+    idx->ForEachKey([&](const index::Key128& key) {
+      ctx->lfu->insert(key, true, parakv::allow::insert);
+      ++rebuilt;
+    });
+    LOG(INFO) << "CreateContext: LFU initialized, capacity=" << lfu_capacity
+              << " total_slots=" << total_slots
+              << " ratio=" << options_.lfu_capacity_ratio
+              << " age_tick=" << options_.lfu_age_tick_sec << "s"
+              << " rebuilt=" << rebuilt << " keys";
+  }
+
   context_ = ctx;
 
   LOG(INFO) << "CreateContext: namespace='" << options_.namespace_name
@@ -325,6 +369,11 @@ WriteResult IndexKVCacheStorageBackend::Put(const std::string& key,
   if (s != parakv::Status::kOk) {
     return {ToBackendCode(s), "index put failed"};
   }
+
+  if (ctx->lfu) {
+    ctx->lfu->insert(k, true);
+  }
+
   return {BackendCode::kOk, {}};
 }
 
@@ -365,6 +414,10 @@ ReadResult IndexKVCacheStorageBackend::Get(const std::string& key,
     return {c, err, {}, {}, 0};
   }
 
+  if (ctx->lfu) {
+    ctx->lfu->find(k);
+  }
+
   ReadResult r;
   r.code = BackendCode::kOk;
   r.metadata = meta;
@@ -393,6 +446,11 @@ WriteResult IndexKVCacheStorageBackend::Delete(const std::string& key) {
                                   ? "key not found"
                                   : "index delete failed"};
   }
+
+  if (ctx->lfu) {
+    ctx->lfu->erase(k);
+  }
+
   return {BackendCode::kOk, {}};
 }
 
@@ -484,7 +542,10 @@ void IndexKVCacheStorageBackend::StatsLoop() {
     LOG(INFO) << "[Stats] namespace='" << options_.namespace_name
               << "' total_segments=" << mgr->GetTotalSegments()
               << " idle=" << mgr->GetIdleSegments()
-              << " full=" << mgr->GetFullSegments();
+              << " full=" << mgr->GetFullSegments()
+              << " index_size=" << ctx->index->Size()
+              << " lfu=" << (ctx->lfu ? ctx->lfu->size() : 0) << "/"
+              << (ctx->lfu ? ctx->lfu->capacity() : 0);
 
     for (const auto& seg : ctx->segments) {
       LOG(INFO) << "[Stats] seg_id=" << seg->GetSegmentId()

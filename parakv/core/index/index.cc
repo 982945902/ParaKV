@@ -426,6 +426,12 @@ Status Index<KeyT, Hash, Eq>::RemapIfEquals(const KeyT& key, uint64_t old_off,
 // ---- Stats ----------------------------------------------------------------
 
 template <typename KeyT, typename Hash, typename Eq>
+void Index<KeyT, Hash, Eq>::ForEachKey(
+    const std::function<void(const KeyT&)>& callback) const {
+  map_.for_each([&](const typename Map::value_type& v) { callback(v.first); });
+}
+
+template <typename KeyT, typename Hash, typename Eq>
 size_t Index<KeyT, Hash, Eq>::Size() const {
   return map_.size();
 }

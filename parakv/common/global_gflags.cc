@@ -35,3 +35,12 @@ DEFINE_string(segement_workspace_path, "./segment_workspace",
 // Index related flags
 DEFINE_uint32(index_wal_checkpoint_bytes, 1ULL << 29,
               "index wal checkpoint bytes, default to 512MB");
+
+// LFU eviction flags
+DEFINE_double(lfu_capacity_ratio, 0.9,
+              "LFU capacity = total_segment_slots * ratio. "
+              "When the number of entries exceeds this, the least frequently "
+              "used entry is evicted. 0 disables LFU eviction.");
+DEFINE_uint32(lfu_age_tick_sec, 60,
+              "Dynamic aging interval in seconds for LFU cache. Items not "
+              "accessed within this interval have their frequency halved.");
